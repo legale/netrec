@@ -73,20 +73,22 @@ Return code:
         default mode is dry-run
         --apply / -a enables execution of ACT commands
         for --apply acquire /tmp/netrec.lock with flock LOCK_EX | LOCK_NB
+        load desired_set
         load real_state through rtnetlink
-        run verifier
+        run verifier for each desired_state from the set over one real_state snapshot
         if --apply and actions succeeded and diff existed:
             print POST_VERIFY
             reload real_state
-            run verifier again in dry-run mode
+            run verifier for the same desired_set again in dry-run mode
             return 0 only if no MISS remains
 
     yaml.c
+        yaml_load_desired_set()
         yaml_load_desired()
         read YAML through libyaml
         require root mapping
         read scenario first
-        fill one flat struct desired_state
+        current YAML path fills desired_set with one flat desired_state
         validate only relations needed by selected scenario
         no generic config graph
         optional routes[] can be present for every scenario
@@ -128,9 +130,17 @@ Return code:
 
 ## Desired state
 
-Desired state читается из YAML через libyaml.
+Desired state ядра verifier теперь подается как fixed-size desired_set.
+
+Сейчас YAML через libyaml по-прежнему поддержан, но пока заполняет только
+один элемент desired_set. Это оставляет verifier независимым от будущего UCI
+adapter и не ломает текущий `make check`.
 
 Структура фиксированная и плоская:
+
+    struct desired_set
+        state[]
+        n_state
 
     struct desired_state
         scenario
@@ -467,6 +477,11 @@ Current container result on 2026-06-06:
     OK smoke_check
     SKIP no netns permission
 
+Current result after desired_set prep on 2026-06-07:
+
+    make check
+    rc=0
+
 ## Apply behavior
 
 Dry-run:
@@ -568,6 +583,7 @@ VXLAN/VLAN creation depends on kernel support and iproute2 support.
 
 ## Next minimal work
 
+    add UCI input adapter that fills desired_set but does not leak UCI into verifier
     add route dst canonicalization or reject non-canonical dst
     add explicit command length overflow detection in act()
     add tests for YAML validation failures
@@ -603,9 +619,9 @@ VXLAN/VLAN creation depends on kernel support and iproute2 support.
 
 Первый production path:
 
-    wda генерирует /var/run/wda/netrec.yaml
-    запись desired YAML только атомарно: tmp + fsync + rename
-    wda запускает /usr/sbin/netrec -c /var/run/wda/netrec.yaml
+    wda не трогает verifier internals
+    netrec получает UCI source mode и сам строит desired_set
+    wda запускает /usr/sbin/netrec --source uci
     stdout/stderr сохраняется коротким хвостом в лог/статус
     rc=0 значит state OK
     rc=1 в dry-run значит найден diff или ошибка, текст вывода обязателен

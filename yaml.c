@@ -526,7 +526,7 @@ static int load_doc(yaml_document_t *doc, struct desired_state *ds)
 	return load_routes(doc, root, ds);
 }
 
-int yaml_load_desired(const char *path, struct desired_state *ds)
+static int yaml_load_desired_one(const char *path, struct desired_state *ds)
 {
 	/* libyaml нужен только для чтения config.yaml в desired_state. */
 	yaml_parser_t parser;
@@ -562,4 +562,25 @@ int yaml_load_desired(const char *path, struct desired_state *ds)
 	fclose(f);
 
 	return rc;
+}
+
+int yaml_load_desired(const char *path, struct desired_state *ds)
+{
+	return yaml_load_desired_one(path, ds);
+}
+
+int yaml_load_desired_set(const char *path, struct desired_set *set)
+{
+	int rc;
+
+	memset(set, 0, sizeof(*set));
+	set->n_state = 1;
+
+	rc = yaml_load_desired_one(path, &set->state[0]);
+	if (rc) {
+		set->n_state = 0;
+		return rc;
+	}
+
+	return 0;
 }

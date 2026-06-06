@@ -30,6 +30,9 @@
 #ifndef NR_DES_DNS4_MAX
 #define NR_DES_DNS4_MAX	4
 #endif
+#ifndef NR_DES_STATE_MAX
+#define NR_DES_STATE_MAX	16
+#endif
 #ifndef NR_DNS4_MAX
 #define NR_DNS4_MAX	16
 #endif
@@ -47,7 +50,7 @@ struct desired_route4 {
 	int has_via;
 };
 
-/* Плоский desired_state: один YAML scenario без generic graph. */
+/* Плоский desired_state: один scenario без generic graph. */
 struct desired_state {
 	char scenario[32];
 
@@ -80,6 +83,11 @@ struct desired_state {
 
 	struct desired_route4 routes[NR_DES_ROUTE4_MAX];
 	int n_routes;
+};
+
+struct desired_set {
+	struct desired_state state[NR_DES_STATE_MAX];
+	int n_state;
 };
 
 struct iface {

@@ -54,9 +54,11 @@ static int load_real(struct real_state *rs)
 	return 0;
 }
 
-static int run_verify(const struct desired_state *ds, int apply, int *act_fail)
+static int run_verify_set(const struct desired_set *set, int apply, int *act_fail)
 {
 	struct real_state rs;
+	int diff = 0;
+	int i;
 	int rc;
 
 	rc = load_real(&rs);
@@ -65,14 +67,21 @@ static int run_verify(const struct desired_state *ds, int apply, int *act_fail)
 	}
 
 	*act_fail = 0;
-	rc = verify_state(ds, &rs, apply, act_fail);
+	for (i = 0; i < set->n_state; i++) {
+		rc = verify_state(&set->state[i], &rs, apply, act_fail);
+		if (rc < 0) {
+			rs_free(&rs);
+			return rc;
+		}
+		diff += rc;
+	}
 	rs_free(&rs);
-	return rc;
+	return diff;
 }
 
 int main(int argc, char **argv)
 {
-	struct desired_state ds;
+	struct desired_set set;
 	const char *cfg = NULL;
 	int act_fail = 0;
 	int lock_fd = -1;
@@ -101,7 +110,7 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	rc = yaml_load_desired(cfg, &ds);
+	rc = yaml_load_desired_set(cfg, &set);
 	if (rc) {
 		return 1;
 	}
@@ -113,7 +122,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	diff = run_verify(&ds, apply, &act_fail);
+	diff = run_verify_set(&set, apply, &act_fail);
 	if (!apply) {
 		return diff ? 1 : 0;
 	}
@@ -125,7 +134,7 @@ int main(int argc, char **argv)
 	}
 
 	printf("POST_VERIFY\n");
-	diff = run_verify(&ds, 0, &act_fail);
+	diff = run_verify_set(&set, 0, &act_fail);
 	if (diff || act_fail) {
 		return 1;
 	}
