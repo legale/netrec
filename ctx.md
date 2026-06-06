@@ -287,7 +287,7 @@ YAML:
     wg:
       ifname: wg0
       peer_ip: 1.2.3.4
-      route_dev: br-lan
+      route_dev: wg0
     vxlan:
       ifname: vx100
       vni: 100
@@ -297,7 +297,7 @@ YAML:
 
 Rules:
 
-    wg.route_dev must equal bridge.name
+    wg.route_dev is explicit and can differ from bridge.name
     vxlan.dev must equal wg.ifname
     vxlan.bridge must equal bridge.name
     uplink section is optional

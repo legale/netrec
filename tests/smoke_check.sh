@@ -62,7 +62,7 @@ grep -q 'bridge br-mgmt exists' "$tmp/out" || {
 	cat "$tmp/out"
 	exit 1
 }
-grep -q 'route 100.100.2.1/32 dev br3_6' "$tmp/out" || {
+grep -q 'route 100.100.2.1/32 dev wg1' "$tmp/out" || {
 	echo "FAIL uci wg route"
 	cat "$tmp/out"
 	exit 1

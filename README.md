@@ -162,7 +162,7 @@ wg_vxlan_bridge
 	wg:
 	  ifname: wg0
 	  peer_ip: 1.2.3.4
-	  route_dev: br-lan
+	  route_dev: wg0
 	vxlan:
 	  ifname: vx100
 	  vni: 100

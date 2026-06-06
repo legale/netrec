@@ -457,10 +457,6 @@ static int load_wg_vxlan(yaml_document_t *doc, yaml_node_t *root,
 		return rc;
 	}
 
-	if (strcmp(ds->wg_route_dev, ds->br_name)) {
-		fprintf(stderr, "yaml: wg.route_dev must equal bridge.name\n");
-		return -EINVAL;
-	}
 	if (strcmp(ds->vx_dev, ds->wg_ifname)) {
 		fprintf(stderr, "yaml: vxlan.dev must equal wg.ifname\n");
 		return -EINVAL;

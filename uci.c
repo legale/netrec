@@ -710,7 +710,7 @@ static int build_wg_vxlan_bridge(const struct uci_db *net,
 
   cpy(ds->wg_ifname, sizeof(ds->wg_ifname), wg_ifname);
   cpy(ds->wg_peer_ip, sizeof(ds->wg_peer_ip), peeraddr);
-  cpy(ds->wg_route_dev, sizeof(ds->wg_route_dev), br_name);
+  cpy(ds->wg_route_dev, sizeof(ds->wg_route_dev), wg_ifname);
   cpy(ds->vx_remote, sizeof(ds->vx_remote), peeraddr);
   cpy(ds->vx_dev, sizeof(ds->vx_dev), wg_ifname);
   cpy(ds->vx_bridge, sizeof(ds->vx_bridge), br_name);
