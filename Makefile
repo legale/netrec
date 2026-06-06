@@ -18,6 +18,10 @@ YAML_OBJS := $(YAML_SRCS:.c=.o)
 
 all: $(APP)
 
+check: $(APP)
+	tests/smoke_check.sh
+	tests/netns_check.sh
+
 $(APP): $(APP_OBJS) $(YAML_OBJS)
 	$(CC) $(CFLAGS) -o $@ $(APP_OBJS) $(YAML_OBJS)
 
@@ -30,4 +34,4 @@ deps/libyaml/src/%.o: deps/libyaml/src/%.c
 clean:
 	rm -f $(APP) $(APP_OBJS) $(YAML_OBJS)
 
-.PHONY: all clean
+.PHONY: all clean check

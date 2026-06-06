@@ -119,6 +119,63 @@ static int get_str_seq(yaml_document_t *doc, yaml_node_t *map, const char *key,
 	return 0;
 }
 
+
+static int load_routes(yaml_document_t *doc, yaml_node_t *root,
+		       struct desired_state *ds)
+{
+	/* routes is optional and intentionally small: dst/prefix, optional via, dev. */
+	yaml_node_item_t *it;
+	yaml_node_t *seq;
+	yaml_node_t *node;
+	struct desired_route4 *rt;
+	int n = 0;
+	int rc;
+
+	seq = map_get(doc, root, "routes");
+	ds->n_routes = 0;
+	if (!seq) {
+		return 0;
+	}
+	if (seq->type != YAML_SEQUENCE_NODE) {
+		fprintf(stderr, "yaml: routes must be sequence\n");
+		return -EINVAL;
+	}
+
+	for (it = seq->data.sequence.items.start;
+	     it < seq->data.sequence.items.top; it++) {
+		if (n >= NR_DES_ROUTE4_MAX) {
+			fprintf(stderr, "yaml: too many routes, max=%d\n",
+				NR_DES_ROUTE4_MAX);
+			return -EINVAL;
+		}
+
+		node = yaml_document_get_node(doc, *it);
+		if (!node || node->type != YAML_MAPPING_NODE) {
+			fprintf(stderr, "yaml: bad routes item\n");
+			return -EINVAL;
+		}
+
+		rt = &ds->routes[n];
+		rc = get_str(doc, node, "dst", rt->dst, sizeof(rt->dst), 1);
+		if (rc) {
+			return rc;
+		}
+		rc = get_str(doc, node, "dev", rt->dev, sizeof(rt->dev), 1);
+		if (rc) {
+			return rc;
+		}
+		rc = get_str(doc, node, "via", rt->via, sizeof(rt->via), 0);
+		if (rc) {
+			return rc;
+		}
+		rt->has_via = !!rt->via[0];
+		n++;
+	}
+
+	ds->n_routes = n;
+	return 0;
+}
+
 static int get_u32(yaml_document_t *doc, yaml_node_t *map, const char *key,
 		   uint32_t *dst)
 {
@@ -159,6 +216,7 @@ static int load_bridge(yaml_document_t *doc, yaml_node_t *root,
 		       struct desired_state *ds)
 {
 	yaml_node_t *br;
+	char mode[16];
 	int rc;
 
 	br = map_get(doc, root, "bridge");
@@ -171,10 +229,47 @@ static int load_bridge(yaml_document_t *doc, yaml_node_t *root,
 	if (rc) {
 		return rc;
 	}
-
 	rc = get_str(doc, br, "addr", ds->br_addr, sizeof(ds->br_addr), 0);
 	if (rc) {
 		return rc;
+	}
+	rc = get_str(doc, br, "addr_mode", mode, sizeof(mode), 0);
+	if (rc) {
+		return rc;
+	}
+	rc = get_str(doc, br, "dhcp_cmd", ds->br_dhcp_cmd,
+		     sizeof(ds->br_dhcp_cmd), 0);
+	if (rc) {
+		return rc;
+	}
+
+	if (!mode[0]) {
+		ds->br_addr_mode = ds->br_addr[0] ? ADDR_STATIC : ADDR_NONE;
+	} else if (!strcmp(mode, "static")) {
+		ds->br_addr_mode = ADDR_STATIC;
+		if (!ds->br_addr[0]) {
+			fprintf(stderr, "yaml: bridge.addr required for static\n");
+			return -EINVAL;
+		}
+	} else if (!strcmp(mode, "dhcp")) {
+		ds->br_addr_mode = ADDR_DHCP;
+		if (ds->br_addr[0]) {
+			fprintf(stderr, "yaml: bridge.addr not allowed for dhcp\n");
+			return -EINVAL;
+		}
+		if (!ds->br_dhcp_cmd[0]) {
+			fprintf(stderr, "yaml: bridge.dhcp_cmd required for dhcp\n");
+			return -EINVAL;
+		}
+	} else if (!strcmp(mode, "none")) {
+		ds->br_addr_mode = ADDR_NONE;
+		if (ds->br_addr[0]) {
+			fprintf(stderr, "yaml: bridge.addr not allowed for none\n");
+			return -EINVAL;
+		}
+	} else {
+		fprintf(stderr, "yaml: bad bridge.addr_mode=%s\n", mode);
+		return -EINVAL;
 	}
 
 	return get_str_seq(doc, br, "ports", ds->br_ports,
@@ -336,40 +431,38 @@ static int load_doc(yaml_document_t *doc, struct desired_state *ds)
 	}
 
 	if (is_scn(ds, "only_uplink", "only_uplink_iface")) {
-		return load_uplink(doc, root, ds);
-	}
-	if (is_scn(ds, "uplink_bridge", "uplink_in_bridge")) {
-		rc = load_bridge(doc, root, ds);
-		if (rc) {
-			return rc;
-		}
-		return load_uplink(doc, root, ds);
-	}
-	if (is_scn(ds, "vlan_bridge", "vlan_in_bridge")) {
-		rc = load_bridge(doc, root, ds);
-		if (rc) {
-			return rc;
-		}
 		rc = load_uplink(doc, root, ds);
-		if (rc) {
-			return rc;
-		}
-		return load_vlan(doc, root, ds);
-	}
-	if (!strcmp(ds->scenario, "wg_vxlan_bridge")) {
+	} else if (is_scn(ds, "uplink_bridge", "uplink_in_bridge")) {
 		rc = load_bridge(doc, root, ds);
-		if (rc) {
-			return rc;
+		if (!rc) {
+			rc = load_uplink(doc, root, ds);
 		}
-		rc = load_uplink(doc, root, ds);
-		if (rc) {
-			return rc;
+	} else if (is_scn(ds, "vlan_bridge", "vlan_in_bridge")) {
+		rc = load_bridge(doc, root, ds);
+		if (!rc) {
+			rc = load_uplink(doc, root, ds);
 		}
-		return load_wg_vxlan(doc, root, ds);
+		if (!rc) {
+			rc = load_vlan(doc, root, ds);
+		}
+	} else if (!strcmp(ds->scenario, "wg_vxlan_bridge")) {
+		rc = load_bridge(doc, root, ds);
+		if (!rc) {
+			rc = load_uplink(doc, root, ds);
+		}
+		if (!rc) {
+			rc = load_wg_vxlan(doc, root, ds);
+		}
+	} else {
+		fprintf(stderr, "yaml: unsupported scenario=%s\n", ds->scenario);
+		return -EINVAL;
 	}
 
-	fprintf(stderr, "yaml: unsupported scenario=%s\n", ds->scenario);
-	return -EINVAL;
+	if (rc) {
+		return rc;
+	}
+
+	return load_routes(doc, root, ds);
 }
 
 int yaml_load_desired(const char *path, struct desired_state *ds)

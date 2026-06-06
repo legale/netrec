@@ -26,6 +26,7 @@ netrec - one-shot reconciler для Linux/Debian/OpenWrt-like систем.
     сравнивать desired_state и real_state
     печатать стабильный diff в формате OK/MISS/ACT
     по --apply выполнять заранее сформированные repair actions
+    после --apply повторно снять real_state и убедиться, что state сошелся
 
 netrec не является daemon и не содержит event loop. Внешний watcher, cron,
 systemd/openrc/procd hook или IvanDriver могут запускать netrec при событии.
@@ -45,13 +46,13 @@ Apply:
 
 Return code:
 
-    0 - diff нет и apply failures нет
-    1 - diff есть или apply command failed
-    2 - ошибка запуска, YAML, netlink или internal error
+    0 - diff нет, apply failures нет, post-apply verify сошелся
+    1 - diff есть, apply command failed, YAML/netlink/internal error
+    2 - ошибка аргументов командной строки
 
 ## Текущая реализация
 
-Файлы:
+Файлы верхнего уровня:
 
     main.c
     yaml.c / yaml.h
@@ -60,6 +61,7 @@ Return code:
     verify.c / verify.h
     Makefile
     examples/*.yaml
+    tests/*.sh
     README.md
     ctx.md
 
@@ -70,6 +72,14 @@ Return code:
         -c config.yaml required
         default mode is dry-run
         --apply / -a enables execution of ACT commands
+        for --apply acquire /tmp/netrec.lock with flock LOCK_EX | LOCK_NB
+        load real_state through rtnetlink
+        run verifier
+        if --apply and actions succeeded and diff existed:
+            print POST_VERIFY
+            reload real_state
+            run verifier again in dry-run mode
+            return 0 only if no MISS remains
 
     yaml.c
         yaml_load_desired()
@@ -79,6 +89,7 @@ Return code:
         fill one flat struct desired_state
         validate only relations needed by selected scenario
         no generic config graph
+        optional routes[] can be present for every scenario
 
     netlink.c
         nl_load_state()
@@ -110,6 +121,7 @@ Return code:
         no shell
         no system()
         no rollback
+        reports apply failure through act_fail output parameter
 
 ## Desired state
 
@@ -118,108 +130,19 @@ Desired state читается из YAML через libyaml.
 Структура фиксированная и плоская:
 
     struct desired_state
+        scenario
+        bridge fields
+        uplink fields
+        vlan fields
+        wg fields
+        vxlan fields
+        routes[]
 
-Поля сейчас:
+Нет generic DAG, registry, callback framework, hashmap, realloc.
 
-    scenario
-    bridge.name
-    bridge.addr
-    bridge.ports[]
-    uplink.ifname
-    vlan.ifname
-    vlan.id
-    vlan.link
-    vlan.bridge
-    wg.ifname
-    wg.peer_ip
-    wg.route_dev
-    vxlan.ifname
-    vxlan.vni
-    vxlan.remote
-    vxlan.dev
-    vxlan.bridge
-
-Ограничения:
-
-    только IPv4
-    один scenario на запуск
-    один bridge
-    один uplink
-    один vlan
-    один wg
-    один vxlan
-    bridge.ports: от 0 до 32 дополнительных member-интерфейсов
-
-## Real state
-
-Real state снимается из ядра через rtnetlink.
-
-Сейчас собирается:
-
-Interfaces:
-
-    name
-    ifindex
-    kind
-    flags IFF_UP
-    carrier, если доступно
-    master ifindex
-    link ifindex
-
-IPv4 addresses:
-
-    ifindex
-    addr/prefix
-
-IPv4 routes:
-
-    dst/prefix
-    gateway, если задан
-    oif
-
-VXLAN:
-
-    ifname
-    ifindex
-    vni
-    remote
-    link/dev ifindex
-
-VLAN:
-
-    ifname
-    ifindex
-    vlan id
-    link ifindex
-
-## Fixed limits
-
-real_state использует fixed arrays намеренно. realloc сейчас не используется.
-
-Лимиты в state.h:
-
-    NR_IFACE_MAX 2048
-    NR_ADDR4_MAX 8192
-    NR_ROUTE4_MAX 32768
-    NR_VXLAN_MAX 1024
-    NR_VLAN_MAX 4096
-    NR_BR_PORT_MAX 32
-
-Если netlink dump превышает лимит, netrec должен печатать понятную ошибку
-internal-limit, например:
-
-    netlink: failed: too many IPv4 routes in netlink dump, max=32768
-
-Нельзя возвращать простой strerror(ENOSPC), потому что это выглядит как ошибка
-дискового места, а не лимит массива netrec.
-
-## Поддерживаемые scenarios
+## Supported scenarios
 
 ### only_uplink
-
-Alias:
-
-    only_uplink_iface
 
 YAML:
 
@@ -227,25 +150,22 @@ YAML:
     uplink:
       ifname: eth0
 
+Alias:
+
+    only_uplink_iface
+
 Checks:
 
-    uplink exists
-    uplink is up
+    uplink iface exists
+    uplink iface is up
+    optional routes[]
 
 Actions:
 
-    ip link set <uplink> up
-
-Если physical uplink отсутствует, netrec не создает его и печатает только
-comment action:
-
-    ACT # provide uplink iface <ifname>
+    missing iface: ACT # provide uplink iface <ifname>
+    down iface: ip link set <ifname> up
 
 ### uplink_bridge
-
-Alias:
-
-    uplink_in_bridge
 
 YAML:
 
@@ -259,35 +179,35 @@ YAML:
     uplink:
       ifname: eth0
 
+Alias:
+
+    uplink_in_bridge
+
 Checks:
 
-    bridge exists and kind is bridge
-    bridge has expected addr, if addr is set
+    bridge exists
+    bridge type is bridge
+    bridge is up
+    bridge address mode is satisfied
     uplink exists
     uplink is up
     uplink master is bridge
     each bridge.ports iface exists
     each bridge.ports iface is up
     each bridge.ports iface master is bridge
+    optional routes[]
 
 Actions:
 
-    ip link add <bridge> type bridge
-    ip addr add <addr> dev <bridge>
-    ip link set <uplink> up
-    ip link set <uplink> master <bridge>
-    ip link set <port> up
-    ip link set <port> master <bridge>
-
-Если bridge port отсутствует, netrec не создает его и печатает comment action:
-
-    ACT # provide bridge port iface <ifname>
+    missing bridge: ip link add <br> type bridge; ip link set <br> up
+    wrong bridge type: ip link del <br>; ip link add <br> type bridge; ip link set <br> up
+    bridge down: ip link set <br> up
+    missing static addr: ip addr add <addr> dev <br>
+    missing dhcp addr: expanded bridge.dhcp_cmd
+    iface down: ip link set <ifname> up
+    wrong master: ip link set <ifname> master <br>
 
 ### vlan_bridge
-
-Alias:
-
-    vlan_in_bridge
 
 YAML:
 
@@ -306,31 +226,33 @@ YAML:
       link: eth0
       bridge: br-lan
 
-Checks:
+Alias:
 
-    bridge exists and kind is bridge
-    bridge has expected addr, if addr is set
-    uplink exists
-    uplink is up
-    vlan iface exists and kind is vlan
+    vlan_in_bridge
+
+Rules:
+
+    vlan.link must equal uplink.ifname
+    vlan.bridge must equal bridge.name
+    if vlan.link absent, it defaults to uplink.ifname
+    if vlan.bridge absent, it defaults to bridge.name
+
+Checks/actions:
+
+    all uplink_bridge checks/actions except uplink master is not forced
+    vlan iface exists and type is vlan
     vlan id matches
-    vlan link matches uplink
+    vlan link matches desired link
     vlan is up
     vlan master is bridge
-    each bridge.ports iface exists
-    each bridge.ports iface is up
-    each bridge.ports iface master is bridge
+    optional routes[]
 
-Actions:
+VLAN id/link are treated as immutable. If wrong, verifier emits recreate actions:
 
-    ip link add <bridge> type bridge
-    ip addr add <addr> dev <bridge>
-    ip link set <uplink> up
+    ip link del <vlan>
     ip link add link <link> name <vlan> type vlan id <id>
     ip link set <vlan> up
     ip link set <vlan> master <bridge>
-    ip link set <port> up
-    ip link set <port> master <bridge>
 
 ### wg_vxlan_bridge
 
@@ -356,271 +278,262 @@ YAML:
       dev: wg0
       bridge: br-lan
 
-Checks:
+Rules:
 
-    bridge exists and kind is bridge
-    bridge has expected addr, if addr is set
-    uplink exists
-    uplink is up
-    exact route wg.peer_ip/32 over wg.route_dev exists
+    wg.route_dev must equal bridge.name
+    vxlan.dev must equal wg.ifname
+    vxlan.bridge must equal bridge.name
+
+Checks/actions:
+
+    all uplink_bridge checks/actions except uplink master is not forced
+    exact route wg.peer_ip/32 dev wg.route_dev exists
     wg iface exists
     wg iface is up
-    vxlan iface exists and kind is vxlan
+    vxlan iface exists and type is vxlan
     vxlan vni matches
     vxlan remote matches
-    vxlan parent dev matches wg.ifname
+    vxlan parent dev matches wg iface
     vxlan is up
     vxlan master is bridge
-    each bridge.ports iface exists
-    each bridge.ports iface is up
-    each bridge.ports iface master is bridge
+    optional routes[]
 
-Actions:
+VXLAN vni/remote/dev are treated as immutable. If wrong, verifier emits recreate
+actions:
 
-    ip link add <bridge> type bridge
-    ip addr add <addr> dev <bridge>
-    ip link set <uplink> up
-    ip route add <peer_ip>/32 dev <route_dev>
-    ip link add <wg> type wireguard
-    ip link add <vxlan> type vxlan id <vni> remote <remote> dev <wg>
-    ip link set <wg> up
+    ip link del <vxlan>
+    ip link add <vxlan> type vxlan id <vni> remote <remote> dev <dev>
     ip link set <vxlan> up
     ip link set <vxlan> master <bridge>
-    ip link set <port> up
-    ip link set <port> master <bridge>
 
-WireGuard keys/peers сейчас не проверяются.
+WireGuard keys and peers are not configured yet. wg iface creation is only:
 
-## Формат вывода
+    ip link add <wg> type wireguard
 
-Формат должен оставаться стабильным для grep/tests:
+## Bridge address model
 
-    OK bridge br-lan exists
-    MISS addr 10.10.10.1/24 dev br-lan
-    ACT ip addr add 10.10.10.1/24 dev br-lan
+bridge.addr_mode values:
 
-    MISS route 1.2.3.4/32 dev br-lan
-    ACT ip route add 1.2.3.4/32 dev br-lan
+    absent
+    none
+    static
+    dhcp
 
-    MISS iface wg0
-    ACT ip link add wg0 type wireguard
+Rules:
 
-    MISS iface vx100
-    ACT ip link add vx100 type vxlan id 100 remote 10.20.30.40 dev wg0
-    ACT ip link set vx100 up
-    ACT ip link set vx100 master br-lan
+    addr_mode absent + addr set => static
+    addr_mode absent + addr absent => none
+    addr_mode static requires bridge.addr
+    addr_mode none forbids bridge.addr
+    addr_mode dhcp requires bridge.dhcp_cmd and forbids bridge.addr
 
-Verifier должен выводить все diff, не останавливаться на первом.
+Static mode check:
 
-## Apply mode
+    exact IPv4 addr/prefix exists on bridge iface
 
-Apply mode включается только явно:
+Static mode action:
 
-    --apply
-    -a
+    ip addr add <addr> dev <bridge>
 
-Default mode remains dry-run.
+DHCP mode check:
 
-Поведение --apply сейчас:
+    any IPv4 address exists on bridge iface
 
-    печатает те же ACT lines, что dry-run
-    выполняет ACT commands сразу
-    печатает APPLY_OK cmd=<cmd> при успехе
-    печатает APPLY_FAIL rc=<rc> cmd=<cmd> при ошибке
-    не выполняет ACT comment lines starting with '#'
+DHCP mode action:
 
-Реализация:
+    bridge.dhcp_cmd after replacing literal $iface by bridge.name
 
-    no /bin/sh
-    no system()
-    fork()
-    execvp()
-    waitpid()
-    command string is split into argv by spaces/tabs
+Example:
 
-Ограничение осознанное: текущие generated commands не требуют quoting.
-Это снижает риск shell injection от YAML values.
+    bridge:
+      name: br-lan
+      addr_mode: dhcp
+      dhcp_cmd: udhcpc -i $iface -q -n
 
-Текущие ограничения apply:
+No shell is used. Command string is split by spaces/tabs and executed through
+execvp. Quotes are not supported.
 
-    no transaction rollback
-    no lock yet
-    no post-apply real_state reload yet
-    no verify-after-apply yet
-    real_state is captured once before actions
-    run netrec again after --apply to verify final state
+## Optional routes[]
 
-## Dependencies
+routes[] is optional for every scenario.
 
-libyaml-master.zip предоставлен пользователем.
+YAML:
 
-libyaml разложен внутри проекта:
+    routes:
+      - dst: 0.0.0.0/0
+        via: 10.10.10.254
+        dev: br-lan
+      - dst: 1.2.3.4/32
+        dev: br-lan
 
-    netrec/deps/libyaml
+Rules:
 
-Makefile собирает libyaml локально из deps, без системного libyaml-dev.
+    dst is required, IPv4 prefix string
+    dev is required
+    via is optional IPv4 address
+    table is always main
+    IPv6 is not supported
+    route count limit is NR_DES_ROUTE4_MAX
 
-libnl-tiny-master.zip тоже был предоставлен пользователем, но сейчас не используется.
-Текущая реализация использует прямой rtnetlink без libnl-tiny, потому что это
-меньше слоев и проще отлаживать. libnl-tiny можно рассмотреть позже только если
-он реально уменьшит код и риск.
+Check:
 
-## Build/test commands
+    exact dst/prefix + dev + optional via in real_state route dump
 
-Основная проверка:
+Action:
 
-    cd /mnt/data/netrec
-    make clean
+    ip route replace <dst> via <via> dev <dev>
+    ip route replace <dst> dev <dev>
+
+If dev does not exist in the old snapshot, verifier still emits the route repair
+command. This allows one --apply run to create bridge/dev first and then add the
+route before POST_VERIFY.
+
+## Current examples
+
+    examples/only_uplink.yaml
+    examples/uplink_bridge.yaml
+    examples/uplink_bridge_dhcp.yaml
+    examples/uplink_bridge_routes.yaml
+    examples/vlan_bridge.yaml
+    examples/wg_vxlan_bridge.yaml
+
+## Build and tests
+
+Build:
+
     make
-    for f in examples/*.yaml; do ./netrec -c "$f" || true; done
 
-Безопасная apply-проверка в текущем контейнере:
+Clean:
 
-    ./netrec --apply -c examples/only_uplink.yaml
+    make clean
 
-Она безопасна, если eth0 уже существует и up, потому что ACT command не
-выполняется.
+Fast regression:
 
-Архив проекта:
+    make check
 
-    cd /mnt/data
-    tar -cjf netrec<idx>.tar.bz2 netrec
+make check runs:
 
-## Что сейчас НЕ поддержано
+    tests/smoke_check.sh
+        runs all examples on current host
+        accepts rc 0 or 1
+        fails on rc outside 0/1
+        checks DHCP $iface substitution output
+        checks routes output
+
+    tests/netns_check.sh
+        creates isolated network namespace when permissions allow it
+        creates veth ifaces eth0/eth1/eth2
+        tests only_uplink OK
+        tests --apply uplink_bridge from missing bridge
+        requires POST_VERIFY in apply output
+        tests dry-run uplink_bridge after apply
+        tests optional routes[] OK
+        tests DHCP dry-run ACT command
+        skips cleanly if netns permission is unavailable
+
+Current container result on 2026-06-06:
+
+    make check
+    OK smoke_check
+    SKIP no netns permission
+
+## Apply behavior
+
+Dry-run:
+
+    prints OK/MISS/ACT
+    does not execute ACT
+    returns 0 if no MISS
+    returns 1 if MISS exists
+
+Apply:
+
+    obtains /tmp/netrec.lock
+    if lock is already held, prints "apply: another netrec apply is running"
+    executes non-comment ACT commands
+    comment ACT commands start with '#', are printed, but not executed
+    prints APPLY_OK for successful command
+    prints APPLY_FAIL rc=<rc> cmd=<cmd> for failed command
+    if any command failed, returns 1 and does not claim convergence
+    if commands were needed and succeeded, prints POST_VERIFY
+    reloads real_state from kernel
+    runs verifier in dry-run mode
+    returns 0 only if post-apply verify has no MISS
+
+No rollback exists. This is intentional for current stage.
+
+## Static limits
+
+Defined in state.h:
+
+    NR_IFACE_MAX        2048
+    NR_ADDR4_MAX        8192
+    NR_ROUTE4_MAX       32768
+    NR_VXLAN_MAX        1024
+    NR_VLAN_MAX         4096
+    NR_BR_PORT_MAX      32
+    NR_DES_ROUTE4_MAX   64
+
+On overflow, netlink/yaml loaders return a specific error instead of silently
+truncating state.
+
+## Current non-goals
 
     daemon mode
     event loop
-    UCI
-    JSON
-    Wi-Fi
+    UCI parser
+    JSON parser
     firewall
-    DNS/DHCP
+    DNS
+    Wi-Fi
     netifd integration
-    WireGuard keys/peers check
-    multiple bridge objects
-    multiple vlan objects
-    multiple vxlan objects
-    multiple wg objects
-    multiple routes from YAML
-    address mode static/dhcp schema
-    deletion of extra addresses/routes/bridge ports
-    policy routing
-    route metrics
-    multiple routing tables
-    rollback for --apply
+    WireGuard key/peer config
+    IPv6
+    dynamic allocation
+    generic graph solver
+    deletion of extra addresses/routes/ports
+    rollback
 
-## Production-ready target
+## Important design choices
 
-Итоговая цель - production-ready netrec с простой моделью без generic dependency
-graph.
+One-shot reconciler is intentional. External event systems should not encode
+repair logic. They should only trigger netrec.
 
-Требования:
+Verifier owns the repair plan. The same verifier prints dry-run ACT and executes
+those ACT commands in --apply. This keeps dry-run and apply behavior aligned.
 
-    сохранять one-shot model
-    сохранять fixed arrays, пока лимитов достаточно
-    сохранять явные scenarios и линейный verifier
-    иметь lock для --apply
-    после --apply делать новый netlink snapshot и повторный dry-run verify
-    возвращать ошибку, если после apply состояние не сошлось
-    иметь понятные YAML errors до netlink/apply
-    проверять kind интерфейса: bridge/vlan/vxlan/wireguard, где возможно
-    не использовать shell для обычных ip actions
-    поддержать shell/template command только там, где это явно задано config
+real_state is a full kernel snapshot, not event delta. This is the main reliability
+property.
 
-## Address model target
+Fixed arrays are intentional. Limits are explicit and fail closed.
 
-Нужно поддержать два режима адресации.
+No shell is used for repair actions. This limits quoting flexibility but removes
+shell injection and quoting ambiguity.
 
-Static address:
+## Current risks / known limits
 
-    iface:
-      ifname: br-lan
-      addr_mode: static
-      addr: 10.10.10.1/24
+Command splitter supports only spaces/tabs. Quoting is not supported.
 
-Проверка:
+DHCP mode only checks that some IPv4 address exists on the bridge. It does not
+validate lease source, gateway, DNS, lease time, or DHCP server identity.
 
-    addr присутствует на интерфейсе
-    если addr отсутствует, ACT ip addr add <addr> dev <ifname>
+Static addr action uses ip addr add. Extra old addresses are not removed.
 
-DHCP address:
+Routes are checked as exact routes in main table only. Extra wrong routes are not
+removed.
 
-    iface:
-      ifname: br-wan
-      addr_mode: dhcp
-      dhcp_cmd: "udhcpc -i $iface -q -n"
+Route dst should be canonical network prefix. Non-canonical input can fail exact
+match after kernel normalization.
 
-Проверка MVP:
+WireGuard interface creation may fail if wireguard support is unavailable.
 
-    iface exists
-    iface up
-    есть хотя бы один IPv4 address на iface
-    если адреса нет, ACT показывает DHCP command с заменой $iface
+VXLAN/VLAN creation depends on kernel support and iproute2 support.
 
-Ограничение:
+## Next minimal work
 
-    поддержать только $iface -> interface name
-    не добавлять generic template engine
-    отдельно решить, допускается ли shell для dhcp_cmd
-    если shell нужен, это должно быть явно видно в коде и документации
-
-## Multiple routes target
-
-Маршруты должны стать множественными.
-
-YAML target:
-
-    routes:
-      - dst: 1.2.3.4/32
-        dev: br-lan
-      - dst: 10.20.0.0/16
-        via: 10.10.10.254
-        dev: br-lan
-      - default: true
-        via: 10.10.10.254
-        dev: br-lan
-
-Проверка:
-
-    для каждого route проверить dst/prefix
-    проверить oif/dev
-    проверить gateway, если задан
-    default route хранить как dst 0.0.0.0/0
-    если route отсутствует, печатать ACT ip route add ...
-    не удалять лишние маршруты на первом этапе
-
-Ограничение:
-
-    IPv4 only
-    main table only на первом этапе
-    policy routing, metrics и multiple tables позже, только если появится req
-
-## IvanDriver integration target
-
-netrec не должен становиться демоном.
-
-IvanDriver или другой watcher должен:
-
-    слушать RTM_NEWLINK/RTM_DELLINK
-    слушать RTM_NEWADDR/RTM_DELADDR
-    слушать RTM_NEWROUTE/RTM_DELROUTE
-    на событие ставить dirty flag
-    запускать netrec после debounce 300-500 ms
-    перед --apply брать lock
-    после --apply запускать dry-run verify
-    при still MISS писать log/error и включать backoff
-
-Главная идея:
-
-    event only marks dirty
-    netrec always reads full kernel state
-    verifier decides from desired_state + real_state only
-
-## Ближайший порядок работ
-
-1. Добавить lock для --apply.
-2. Добавить post-apply netlink reload и verify-after-apply.
-3. Обновить README.md под фактическое поведение после каждого шага.
-4. Добавить address model: static/dhcp.
-5. Добавить multiple routes.
-6. Добавить netns fixture tests без sleeps, pcap и железа.
+    add route dst canonicalization or reject non-canonical dst
+    add explicit command length overflow detection in act()
+    add tests for YAML validation failures
+    add netns route/apply tests on a host with CAP_NET_ADMIN
+    decide whether static addr should use ip addr replace/flush policy
+    decide whether to support extra route deletion later

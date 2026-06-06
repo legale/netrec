@@ -58,9 +58,9 @@ static int parse_ip4(const char *s, uint32_t *addr)
 	return 0;
 }
 
-static int route_exact_dev(const struct real_state *rs, uint32_t dst, int oif)
+static int route_exact(const struct real_state *rs, uint32_t dst,
+		       int prefix, int oif, uint32_t gw, int has_gw)
 {
-	/* Проверяем именно /32 route, не default route и не lookup. */
 	int i;
 
 	if (oif <= 0) {
@@ -71,12 +71,19 @@ static int route_exact_dev(const struct real_state *rs, uint32_t dst, int oif)
 		if (rs->route4[i].oif != oif) {
 			continue;
 		}
-		if (rs->route4[i].prefix != 32) {
+		if (rs->route4[i].prefix != prefix) {
 			continue;
 		}
-		if (rs->route4[i].dst == dst) {
-			return 1;
+		if (rs->route4[i].dst != dst) {
+			continue;
 		}
+		if (has_gw && (!rs->route4[i].has_gw || rs->route4[i].gw != gw)) {
+			continue;
+		}
+		if (!has_gw && rs->route4[i].has_gw) {
+			continue;
+		}
+		return 1;
 	}
 
 	return 0;
@@ -99,6 +106,52 @@ static int addr_exists(const struct real_state *rs, int ifindex, uint32_t addr,
 		}
 	}
 
+	return 0;
+}
+
+static int addr_any_exists(const struct real_state *rs, int ifindex)
+{
+	int i;
+
+	for (i = 0; i < rs->n_addr4; i++) {
+		if (rs->addr4[i].ifindex == ifindex) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static int subst_iface(char *dst, size_t sz, const char *src, const char *ifname)
+{
+	static const char key[] = "$iface";
+	size_t n = 0;
+	size_t klen = sizeof(key) - 1;
+	size_t ilen;
+
+	if (!sz) {
+		return -ENOSPC;
+	}
+
+	ilen = strlen(ifname);
+	while (*src) {
+		if (!strncmp(src, key, klen)) {
+			if (n + ilen >= sz) {
+				return -ENOSPC;
+			}
+			memcpy(dst + n, ifname, ilen);
+			n += ilen;
+			src += klen;
+			continue;
+		}
+
+		if (n + 1 >= sz) {
+			return -ENOSPC;
+		}
+		dst[n++] = *src++;
+	}
+
+	dst[n] = '\0';
 	return 0;
 }
 
@@ -232,21 +285,31 @@ static int check_bridge(const struct desired_state *ds,
 			const struct real_state *rs, struct vctx *ctx)
 {
 	const struct iface *br;
+	int diff = 0;
 
 	br = rs_find_iface(rs, ds->br_name);
 	if (br && !strcmp(br->kind, "bridge")) {
 		ok("bridge %s exists", ds->br_name);
-		return 0;
+		if (br->flags & IFF_UP) {
+			ok("bridge %s up", ds->br_name);
+		} else {
+			miss("bridge %s up", ds->br_name);
+			act(ctx, "ip link set %s up", ds->br_name);
+			diff++;
+		}
+		return diff;
 	}
 	if (br) {
 		miss("bridge %s type bridge", ds->br_name);
 		act(ctx, "ip link del %s", ds->br_name);
 		act(ctx, "ip link add %s type bridge", ds->br_name);
+		act(ctx, "ip link set %s up", ds->br_name);
 		return 1;
 	}
 
 	miss("bridge %s exists", ds->br_name);
 	act(ctx, "ip link add %s type bridge", ds->br_name);
+	act(ctx, "ip link set %s up", ds->br_name);
 	return 1;
 }
 
@@ -254,14 +317,30 @@ static int check_bridge_addr(const struct desired_state *ds,
 			     const struct real_state *rs, struct vctx *ctx)
 {
 	const struct iface *br;
+	char cmd[256];
 	uint32_t addr;
 	int prefix;
 
-	if (!ds->br_addr[0]) {
+	if (ds->br_addr_mode == ADDR_NONE) {
 		return 0;
 	}
 
 	br = rs_find_iface(rs, ds->br_name);
+	if (ds->br_addr_mode == ADDR_DHCP) {
+		if (br && addr_any_exists(rs, br->ifindex)) {
+			ok("dhcp addr dev %s", ds->br_name);
+			return 0;
+		}
+
+		miss("dhcp addr dev %s", ds->br_name);
+		if (subst_iface(cmd, sizeof(cmd), ds->br_dhcp_cmd, ds->br_name)) {
+			act(ctx, "# bad yaml bridge.dhcp_cmd too long");
+			return 1;
+		}
+		act(ctx, "%s", cmd);
+		return 1;
+	}
+
 	if (parse_addr_prefix(ds->br_addr, &addr, &prefix)) {
 		miss("addr %s dev %s", ds->br_addr, ds->br_name);
 		act(ctx, "# bad yaml bridge.addr %s", ds->br_addr);
@@ -278,8 +357,8 @@ static int check_bridge_addr(const struct desired_state *ds,
 	return 1;
 }
 
-static int check_route(const struct desired_state *ds,
-		       const struct real_state *rs, struct vctx *ctx)
+static int check_wg_peer_route(const struct desired_state *ds,
+			       const struct real_state *rs, struct vctx *ctx)
 {
 	const struct iface *dev;
 	uint32_t ip;
@@ -291,14 +370,68 @@ static int check_route(const struct desired_state *ds,
 	}
 
 	dev = rs_find_iface(rs, ds->wg_route_dev);
-	if (dev && route_exact_dev(rs, ip, dev->ifindex)) {
+	if (dev && route_exact(rs, ip, 32, dev->ifindex, 0, 0)) {
 		ok("route %s/32 dev %s", ds->wg_peer_ip, ds->wg_route_dev);
 		return 0;
 	}
 
 	miss("route %s/32 dev %s", ds->wg_peer_ip, ds->wg_route_dev);
-	act(ctx, "ip route add %s/32 dev %s", ds->wg_peer_ip, ds->wg_route_dev);
+	act(ctx, "ip route replace %s/32 dev %s", ds->wg_peer_ip, ds->wg_route_dev);
 	return 1;
+}
+
+static int check_one_route(const struct desired_route4 *rt,
+			   const struct real_state *rs, struct vctx *ctx)
+{
+	const struct iface *dev;
+	uint32_t dst;
+	uint32_t via = 0;
+	int prefix;
+
+	if (parse_addr_prefix(rt->dst, &dst, &prefix)) {
+		miss("route %s dev %s", rt->dst, rt->dev);
+		act(ctx, "# bad yaml route.dst %s", rt->dst);
+		return 1;
+	}
+	if (rt->has_via && parse_ip4(rt->via, &via)) {
+		miss("route %s via %s dev %s", rt->dst, rt->via, rt->dev);
+		act(ctx, "# bad yaml route.via %s", rt->via);
+		return 1;
+	}
+
+	dev = rs_find_iface(rs, rt->dev);
+	if (dev && route_exact(rs, dst, prefix, dev->ifindex, via, rt->has_via)) {
+		if (rt->has_via) {
+			ok("route %s via %s dev %s", rt->dst, rt->via, rt->dev);
+		} else {
+			ok("route %s dev %s", rt->dst, rt->dev);
+		}
+		return 0;
+	}
+
+	if (rt->has_via) {
+		miss("route %s via %s dev %s", rt->dst, rt->via, rt->dev);
+		act(ctx, "ip route replace %s via %s dev %s",
+		    rt->dst, rt->via, rt->dev);
+	} else {
+		miss("route %s dev %s", rt->dst, rt->dev);
+		act(ctx, "ip route replace %s dev %s", rt->dst, rt->dev);
+	}
+
+	return 1;
+}
+
+static int check_routes(const struct desired_state *ds,
+			const struct real_state *rs, struct vctx *ctx)
+{
+	int diff = 0;
+	int i;
+
+	for (i = 0; i < ds->n_routes; i++) {
+		diff += check_one_route(&ds->routes[i], rs, ctx);
+	}
+
+	return diff;
 }
 
 static int check_iface_exists(const char *tag, const char *name,
@@ -582,7 +715,7 @@ static int verify_wg_vxlan_bridge(const struct desired_state *ds,
 	diff += check_bridge_addr(ds, rs, ctx);
 	diff += verify_only_uplink(ds, rs, ctx);
 	diff += check_bridge_ports(ds, rs, ctx);
-	diff += check_route(ds, rs, ctx);
+	diff += check_wg_peer_route(ds, rs, ctx);
 
 	wg = rs_find_iface(rs, ds->wg_ifname);
 	if (wg) {
@@ -605,7 +738,7 @@ static int verify_wg_vxlan_bridge(const struct desired_state *ds,
 }
 
 int verify_state(const struct desired_state *ds, const struct real_state *rs,
-		 int apply)
+		 int apply, int *act_fail)
 {
 	/* Один явный dispatch по scenario, без registry/callback framework. */
 	struct vctx ctx;
@@ -630,8 +763,10 @@ int verify_state(const struct desired_state *ds, const struct real_state *rs,
 		return 1;
 	}
 
-	if (ctx.act_fail) {
-		return diff ? diff : 1;
+	diff += check_routes(ds, rs, &ctx);
+
+	if (act_fail) {
+		*act_fail = ctx.act_fail;
 	}
 
 	return diff;

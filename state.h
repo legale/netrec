@@ -24,13 +24,31 @@
 #ifndef NR_BR_PORT_MAX
 #define NR_BR_PORT_MAX	32
 #endif
+#ifndef NR_DES_ROUTE4_MAX
+#define NR_DES_ROUTE4_MAX	64
+#endif
+
+enum addr_mode {
+	ADDR_NONE,
+	ADDR_STATIC,
+	ADDR_DHCP,
+};
+
+struct desired_route4 {
+	char dst[32];
+	char via[INET_ADDRSTRLEN];
+	char dev[IFNAMSIZ];
+	int has_via;
+};
 
 /* Плоский desired_state: один YAML scenario без generic graph. */
 struct desired_state {
 	char scenario[32];
 
 	char br_name[IFNAMSIZ];
+	enum addr_mode br_addr_mode;
 	char br_addr[32];
+	char br_dhcp_cmd[128];
 	char br_ports[NR_BR_PORT_MAX][IFNAMSIZ];
 	int n_br_ports;
 
@@ -50,6 +68,9 @@ struct desired_state {
 	char vx_remote[INET_ADDRSTRLEN];
 	char vx_dev[IFNAMSIZ];
 	char vx_bridge[IFNAMSIZ];
+
+	struct desired_route4 routes[NR_DES_ROUTE4_MAX];
+	int n_routes;
 };
 
 struct iface {
