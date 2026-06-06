@@ -1,0 +1,23 @@
+scenario: wg_vxlan_bridge
+
+bridge:
+  name: br-lan
+  addr: 10.10.10.1/24
+  ports:
+    - eth1
+    - eth2
+
+uplink:
+  ifname: eth0
+
+wg:
+  ifname: wg0
+  peer_ip: 1.2.3.4
+  route_dev: br-lan
+
+vxlan:
+  ifname: vx100
+  vni: 100
+  remote: 10.20.30.40
+  dev: wg0
+  bridge: br-lan

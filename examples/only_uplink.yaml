@@ -1,0 +1,4 @@
+scenario: only_uplink
+
+uplink:
+  ifname: eth0
