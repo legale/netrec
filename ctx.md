@@ -1,6 +1,6 @@
 # netrec context
 
-Дата: 2026-06-06
+Дата: 2026-06-07
 Каталог проекта: /mnt/data/netrec
 
 ## Назначение ctx.md
@@ -109,6 +109,9 @@ Return code:
         linear lookup helpers over fixed arrays
         no hash tables
         no dynamic allocation
+        rs_load_resolv_conf()
+        read /etc/resolv.conf nameserver IPv4 lines into real_state
+        DNS is global user-space state, not kernel state
 
     verify.c
         verify_state()
@@ -131,7 +134,7 @@ Desired state читается из YAML через libyaml.
 
     struct desired_state
         scenario
-        bridge fields
+        bridge fields, including static addr/gateway/dns
         uplink fields
         vlan fields
         wg fields
@@ -189,6 +192,8 @@ Checks:
     bridge type is bridge
     bridge is up
     bridge address mode is satisfied
+    static bridge gateway is satisfied if configured
+    static bridge DNS is present in /etc/resolv.conf if configured
     uplink exists
     uplink is up
     uplink master is bridge
@@ -203,6 +208,8 @@ Actions:
     wrong bridge type: ip link del <br>; ip link add <br> type bridge; ip link set <br> up
     bridge down: ip link set <br> up
     missing static addr: ip addr add <addr> dev <br>
+    missing static gateway: ip route replace 0.0.0.0/0 via <gateway> dev <br>
+    missing static DNS: ACT # set dns <dns> dev <br>
     missing dhcp addr: expanded bridge.dhcp_cmd
     iface down: ip link set <ifname> up
     wrong master: ip link set <ifname> master <br>
@@ -324,16 +331,37 @@ Rules:
     addr_mode absent + addr set => static
     addr_mode absent + addr absent => none
     addr_mode static requires bridge.addr
-    addr_mode none forbids bridge.addr
-    addr_mode dhcp requires bridge.dhcp_cmd and forbids bridge.addr
+    addr_mode none forbids bridge.addr/gateway/dns
+    addr_mode dhcp requires bridge.dhcp_cmd and forbids bridge.addr/gateway/dns
 
 Static mode check:
 
     exact IPv4 addr/prefix exists on bridge iface
+    optional bridge.gateway exists as default IPv4 main-table route via bridge
+    optional bridge.dns entries exist in /etc/resolv.conf nameserver IPv4 lines
 
 Static mode action:
 
     ip addr add <addr> dev <bridge>
+    ip route replace 0.0.0.0/0 via <gateway> dev <bridge>
+    ACT # set dns <dns> dev <bridge>
+
+DNS apply is intentionally not implemented yet. DNS is not kernel state and is
+not safely per-interface in generic Linux. Current DNS support is parse + verify
+against global /etc/resolv.conf + non-executable ACT comment. WDA integration
+must decide how to apply DNS on OpenWrt: UCI/netifd, resolv.conf.d, dnsmasq, or
+an explicit small helper.
+
+Static example:
+
+    bridge:
+      name: br-lan
+      addr_mode: static
+      addr: 10.10.10.1/24
+      gateway: 10.10.10.254
+      dns:
+        - 192.0.2.53
+        - 192.0.2.54
 
 DHCP mode check:
 
@@ -394,6 +422,7 @@ route before POST_VERIFY.
     examples/uplink_bridge.yaml
     examples/uplink_bridge_dhcp.yaml
     examples/uplink_bridge_routes.yaml
+    examples/uplink_bridge_static_full.yaml
     examples/vlan_bridge.yaml
     examples/wg_vxlan_bridge.yaml
 
@@ -419,6 +448,7 @@ make check runs:
         fails on rc outside 0/1
         checks DHCP $iface substitution output
         checks routes output
+        checks static gateway/DNS output
 
     tests/netns_check.sh
         creates isolated network namespace when permissions allow it
@@ -473,6 +503,8 @@ Defined in state.h:
     NR_VLAN_MAX         4096
     NR_BR_PORT_MAX      32
     NR_DES_ROUTE4_MAX   64
+    NR_DES_DNS4_MAX     4
+    NR_DNS4_MAX         16
 
 On overflow, netlink/yaml loaders return a specific error instead of silently
 truncating state.
@@ -484,7 +516,7 @@ truncating state.
     UCI parser
     JSON parser
     firewall
-    DNS
+    DNS apply
     Wi-Fi
     netifd integration
     WireGuard key/peer config
@@ -517,6 +549,11 @@ Command splitter supports only spaces/tabs. Quoting is not supported.
 DHCP mode only checks that some IPv4 address exists on the bridge. It does not
 validate lease source, gateway, DNS, lease time, or DHCP server identity.
 
+DNS check is global /etc/resolv.conf, not true per-interface state. Missing DNS
+causes MISS and comment ACT, but --apply will not fix it. If DNS remains missing,
+post-apply verify fails. This is fail-closed until WDA/OpenWrt DNS apply policy is
+chosen.
+
 Static addr action uses ip addr add. Extra old addresses are not removed.
 
 Routes are checked as exact routes in main table only. Extra wrong routes are not
@@ -537,3 +574,90 @@ VXLAN/VLAN creation depends on kernel support and iproute2 support.
     add netns route/apply tests on a host with CAP_NET_ADMIN
     decide whether static addr should use ip addr replace/flush policy
     decide whether to support extra route deletion later
+
+
+## Внедрение в WDA
+
+Цель первого внедрения - использовать netrec как внешний safety reconciler рядом
+с wda, а не переписывать wda и не встраивать netrec как библиотеку.
+
+Граница ответственности:
+
+    wda получает событие или видит подозрение на рассинхрон
+    wda ставит reconcile_needed
+    debounce timer запускает netrec
+    netrec сам читает desired YAML
+    netrec сам снимает полный real_state
+    netrec сам печатает OK/MISS/ACT
+    netrec сам делает --apply и POST_VERIFY, если режим apply включен
+    wda только логирует rc/output и обновляет метрики
+
+Не запускать netrec на каждый netlink/ubus event напрямую. Нужен debounce, иначе
+будет storm и ложные гонки между netifd, kernel и netrec.
+
+Минимальный режим запуска из wda:
+
+    off       - не запускать netrec
+    dry_run   - запускать без --apply, только логировать MISS/ACT
+    apply     - запускать --apply только после dry-run пилота
+
+Первый production path:
+
+    wda генерирует /var/run/wda/netrec.yaml
+    запись desired YAML только атомарно: tmp + fsync + rename
+    wda запускает /usr/sbin/netrec -c /var/run/wda/netrec.yaml
+    stdout/stderr сохраняется коротким хвостом в лог/статус
+    rc=0 значит state OK
+    rc=1 в dry-run значит найден diff или ошибка, текст вывода обязателен
+    apply запускать только через feature flag
+
+Метрики в wda:
+
+    last_netrec_rc
+    last_netrec_ms
+    last_netrec_ok_ts
+    last_netrec_fail_ts
+    last_netrec_fail_cnt
+    last_netrec_act_cnt
+    last_netrec_msg или хвост вывода
+
+Безопасный apply allowlist на первом этапе:
+
+    ip link set <if> up
+    ip link set <if> master <bridge>
+    ip link add <bridge> type bridge
+    ip addr add <addr> dev <bridge>
+    ip route replace ... dev <bridge>
+    bridge member add через ip link set master
+
+Не включать destructive repair без отдельного решения:
+
+    delete чужие addr
+    delete чужие route
+    delete лишние bridge ports
+    flush iface
+    network restart
+    DNS запись в системные файлы
+
+Что нужно до включения apply в wda:
+
+    собрать netrec в OpenWrt SDK под musl
+    проверить запуск на точке
+    сделать uci/runtime -> desired YAML generator
+    прогнать dry-run 1-2 дня на реальных конфигурациях
+    проверить, что после ручной поломки bridge/addr/route netrec дает правильный ACT
+    отдельно решить OpenWrt DNS apply policy
+
+Для static interface generator должен уметь писать:
+
+    bridge.addr_mode: static
+    bridge.addr: <ip>/<prefix>
+    bridge.gateway: <gw>, если задан gateway
+    bridge.dns: list IPv4 DNS, если задан DNS
+
+Для DHCP interface generator должен писать:
+
+    bridge.addr_mode: dhcp
+    bridge.dhcp_cmd: команда с $iface
+
+Важно: bridge.gateway и bridge.dns сейчас разрешены только для static mode.

@@ -45,6 +45,12 @@ static int load_real(struct real_state *rs)
 		return rc;
 	}
 
+	rc = rs_load_resolv_conf(rs, "/etc/resolv.conf");
+	if (rc) {
+		rs_free(rs);
+		return rc;
+	}
+
 	return 0;
 }
 

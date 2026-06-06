@@ -80,7 +80,7 @@ static int get_str(yaml_document_t *doc, yaml_node_t *map, const char *key,
 static int get_str_seq(yaml_document_t *doc, yaml_node_t *map, const char *key,
 		       char dst[][IFNAMSIZ], int *nr, int max)
 {
-	/* bridge.ports - единственный список в YAML MVP. */
+	/* Список scalar-строк с фиксированным размером элемента IFNAMSIZ. */
 	yaml_node_item_t *it;
 	yaml_node_t *seq;
 	yaml_node_t *node;
@@ -119,6 +119,48 @@ static int get_str_seq(yaml_document_t *doc, yaml_node_t *map, const char *key,
 	return 0;
 }
 
+
+
+static int get_dns_seq(yaml_document_t *doc, yaml_node_t *map, const char *key,
+		       char dst[][INET_ADDRSTRLEN], int *nr, int max)
+{
+	yaml_node_item_t *it;
+	yaml_node_t *seq;
+	yaml_node_t *node;
+	const char *v;
+	int n = 0;
+
+	seq = map_get(doc, map, key);
+	*nr = 0;
+	if (!seq) {
+		return 0;
+	}
+	if (seq->type != YAML_SEQUENCE_NODE) {
+		fprintf(stderr, "yaml: %s must be sequence\n", key);
+		return -EINVAL;
+	}
+
+	for (it = seq->data.sequence.items.start;
+	     it < seq->data.sequence.items.top; it++) {
+		if (n >= max) {
+			fprintf(stderr, "yaml: too many %s, max=%d\n", key, max);
+			return -EINVAL;
+		}
+
+		node = yaml_document_get_node(doc, *it);
+		v = scalar(node);
+		if (!v || !*v) {
+			fprintf(stderr, "yaml: bad %s item\n", key);
+			return -EINVAL;
+		}
+
+		cpy(dst[n], INET_ADDRSTRLEN, v);
+		n++;
+	}
+
+	*nr = n;
+	return 0;
+}
 
 static int load_routes(yaml_document_t *doc, yaml_node_t *root,
 		       struct desired_state *ds)
@@ -233,6 +275,16 @@ static int load_bridge(yaml_document_t *doc, yaml_node_t *root,
 	if (rc) {
 		return rc;
 	}
+	rc = get_str(doc, br, "gateway", ds->br_gateway,
+		     sizeof(ds->br_gateway), 0);
+	if (rc) {
+		return rc;
+	}
+	rc = get_dns_seq(doc, br, "dns", ds->br_dns, &ds->n_br_dns,
+			 NR_DES_DNS4_MAX);
+	if (rc) {
+		return rc;
+	}
 	rc = get_str(doc, br, "addr_mode", mode, sizeof(mode), 0);
 	if (rc) {
 		return rc;
@@ -269,6 +321,15 @@ static int load_bridge(yaml_document_t *doc, yaml_node_t *root,
 		}
 	} else {
 		fprintf(stderr, "yaml: bad bridge.addr_mode=%s\n", mode);
+		return -EINVAL;
+	}
+
+	if (ds->br_gateway[0] && ds->br_addr_mode != ADDR_STATIC) {
+		fprintf(stderr, "yaml: bridge.gateway requires static addr_mode\n");
+		return -EINVAL;
+	}
+	if (ds->n_br_dns && ds->br_addr_mode != ADDR_STATIC) {
+		fprintf(stderr, "yaml: bridge.dns requires static addr_mode\n");
 		return -EINVAL;
 	}
 

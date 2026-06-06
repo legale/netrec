@@ -357,6 +357,61 @@ static int check_bridge_addr(const struct desired_state *ds,
 	return 1;
 }
 
+
+static int check_bridge_gateway(const struct desired_state *ds,
+				const struct real_state *rs, struct vctx *ctx)
+{
+	const struct iface *br;
+	uint32_t gw;
+
+	if (!ds->br_gateway[0]) {
+		return 0;
+	}
+	if (parse_ip4(ds->br_gateway, &gw)) {
+		miss("gateway %s dev %s", ds->br_gateway, ds->br_name);
+		act(ctx, "# bad yaml bridge.gateway %s", ds->br_gateway);
+		return 1;
+	}
+
+	br = rs_find_iface(rs, ds->br_name);
+	if (br && route_exact(rs, 0, 0, br->ifindex, gw, 1)) {
+		ok("gateway %s dev %s", ds->br_gateway, ds->br_name);
+		return 0;
+	}
+
+	miss("gateway %s dev %s", ds->br_gateway, ds->br_name);
+	act(ctx, "ip route replace 0.0.0.0/0 via %s dev %s",
+	    ds->br_gateway, ds->br_name);
+	return 1;
+}
+
+static int check_bridge_dns(const struct desired_state *ds,
+			    const struct real_state *rs, struct vctx *ctx)
+{
+	uint32_t addr;
+	int diff = 0;
+	int i;
+
+	for (i = 0; i < ds->n_br_dns; i++) {
+		if (parse_ip4(ds->br_dns[i], &addr)) {
+			miss("dns %s dev %s", ds->br_dns[i], ds->br_name);
+			act(ctx, "# bad yaml bridge.dns %s", ds->br_dns[i]);
+			diff++;
+			continue;
+		}
+		if (rs_dns4_exists(rs, addr)) {
+			ok("dns %s dev %s", ds->br_dns[i], ds->br_name);
+			continue;
+		}
+
+		miss("dns %s dev %s", ds->br_dns[i], ds->br_name);
+		act(ctx, "# set dns %s dev %s", ds->br_dns[i], ds->br_name);
+		diff++;
+	}
+
+	return diff;
+}
+
 static int check_wg_peer_route(const struct desired_state *ds,
 			       const struct real_state *rs, struct vctx *ctx)
 {
@@ -672,6 +727,8 @@ static int verify_uplink_bridge(const struct desired_state *ds,
 
 	diff += check_bridge(ds, rs, ctx);
 	diff += check_bridge_addr(ds, rs, ctx);
+	diff += check_bridge_gateway(ds, rs, ctx);
+	diff += check_bridge_dns(ds, rs, ctx);
 	diff += verify_only_uplink(ds, rs, ctx);
 
 	up = rs_find_iface(rs, ds->up_ifname);
@@ -690,6 +747,8 @@ static int verify_vlan_bridge(const struct desired_state *ds,
 
 	diff += check_bridge(ds, rs, ctx);
 	diff += check_bridge_addr(ds, rs, ctx);
+	diff += check_bridge_gateway(ds, rs, ctx);
+	diff += check_bridge_dns(ds, rs, ctx);
 	diff += verify_only_uplink(ds, rs, ctx);
 	diff += check_bridge_ports(ds, rs, ctx);
 
@@ -713,6 +772,8 @@ static int verify_wg_vxlan_bridge(const struct desired_state *ds,
 
 	diff += check_bridge(ds, rs, ctx);
 	diff += check_bridge_addr(ds, rs, ctx);
+	diff += check_bridge_gateway(ds, rs, ctx);
+	diff += check_bridge_dns(ds, rs, ctx);
 	diff += verify_only_uplink(ds, rs, ctx);
 	diff += check_bridge_ports(ds, rs, ctx);
 	diff += check_wg_peer_route(ds, rs, ctx);

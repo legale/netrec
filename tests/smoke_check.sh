@@ -50,4 +50,16 @@ grep -q 'route 0.0.0.0/0 via 10.10.10.254 dev br-lan' "$tmp/out" || {
 	exit 1
 }
 
+./netrec -c examples/uplink_bridge_static_full.yaml >"$tmp/out" 2>&1 || true
+grep -q 'gateway 10.10.10.254 dev br-lan' "$tmp/out" || {
+	echo "FAIL static gateway output"
+	cat "$tmp/out"
+	exit 1
+}
+grep -q 'dns 192.0.2.53 dev br-lan' "$tmp/out" || {
+	echo "FAIL static dns output"
+	cat "$tmp/out"
+	exit 1
+}
+
 echo "OK smoke_check"

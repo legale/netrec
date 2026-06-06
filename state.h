@@ -27,6 +27,12 @@
 #ifndef NR_DES_ROUTE4_MAX
 #define NR_DES_ROUTE4_MAX	64
 #endif
+#ifndef NR_DES_DNS4_MAX
+#define NR_DES_DNS4_MAX	4
+#endif
+#ifndef NR_DNS4_MAX
+#define NR_DNS4_MAX	16
+#endif
 
 enum addr_mode {
 	ADDR_NONE,
@@ -48,6 +54,9 @@ struct desired_state {
 	char br_name[IFNAMSIZ];
 	enum addr_mode br_addr_mode;
 	char br_addr[32];
+	char br_gateway[INET_ADDRSTRLEN];
+	char br_dns[NR_DES_DNS4_MAX][INET_ADDRSTRLEN];
+	int n_br_dns;
 	char br_dhcp_cmd[128];
 	char br_ports[NR_BR_PORT_MAX][IFNAMSIZ];
 	int n_br_ports;
@@ -130,6 +139,9 @@ struct real_state {
 	struct route4 route4[NR_ROUTE4_MAX];
 	int n_route4;
 
+	uint32_t dns4[NR_DNS4_MAX];
+	int n_dns4;
+
 	struct vxlan vxlan[NR_VXLAN_MAX];
 	int n_vxlan;
 
@@ -144,9 +156,11 @@ struct diff {
 };
 
 void rs_free(struct real_state *rs);
+int rs_load_resolv_conf(struct real_state *rs, const char *path);
 const struct iface *rs_find_iface(const struct real_state *rs, const char *name);
 const struct iface *rs_find_iface_idx(const struct real_state *rs, int ifindex);
 const struct vxlan *rs_find_vxlan(const struct real_state *rs, const char *name);
 const struct vlan *rs_find_vlan(const struct real_state *rs, const char *name);
+int rs_dns4_exists(const struct real_state *rs, uint32_t addr);
 
 #endif

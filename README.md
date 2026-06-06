@@ -62,6 +62,8 @@ Checks/actions:
 	bridge exists and type is bridge
 	bridge is up
 	bridge has static IPv4 address if addr/addr_mode static is set
+	bridge has default gateway if static gateway is set
+	bridge DNS entries are present in /etc/resolv.conf if static dns is set
 	bridge has any IPv4 address if addr_mode dhcp is set
 	each bridge.ports iface exists, is up, and has bridge as master
 	uplink exists
@@ -74,8 +76,35 @@ Bridge address modes:
 	addr_mode absent + addr set means static
 	addr_mode absent + addr absent means none
 	addr_mode static requires addr
-	addr_mode dhcp requires dhcp_cmd and forbids addr
-	addr_mode none forbids addr
+	addr_mode dhcp requires dhcp_cmd and forbids addr/gateway/dns
+	addr_mode none forbids addr/gateway/dns
+
+Static interface options:
+
+	bridge.gateway is optional IPv4 default gateway
+	bridge.dns is optional IPv4 nameserver list, max 4
+	gateway/dns require static addr_mode
+
+Static example:
+
+	bridge:
+	  name: br-lan
+	  addr_mode: static
+	  addr: 10.10.10.1/24
+	  gateway: 10.10.10.254
+	  dns:
+	    - 192.0.2.53
+	    - 192.0.2.54
+
+Gateway is checked as IPv4 main-table default route over bridge.name and repaired with:
+
+	ip route replace 0.0.0.0/0 via <gateway> dev <bridge>
+
+DNS is checked against global /etc/resolv.conf nameserver IPv4 lines. DNS is
+not kernel-state and is not safely interface-scoped here, so apply only prints a
+comment ACT for missing DNS:
+
+	ACT # set dns <dns> dev <bridge>
 
 DHCP example:
 
@@ -170,9 +199,11 @@ Limits:
 	bridge.ports supports 0..32 additional bridge member interfaces
 	routes supports 0..64 IPv4 routes
 	no daemon mode
-	no UCI, JSON, Wi-Fi, firewall, DNS, netifd integration
+	no UCI, JSON, Wi-Fi, firewall, netifd integration
+	DNS apply is not implemented; only /etc/resolv.conf check exists
 	WireGuard keys/peers are not checked
 	DHCP success is detected only as any IPv4 address on the bridge iface
+	DNS check is global /etc/resolv.conf, not true per-interface DNS state
 
 Static limits are in state.h:
 
@@ -183,6 +214,8 @@ Static limits are in state.h:
 	NR_VLAN_MAX 4096
 	NR_BR_PORT_MAX 32
 	NR_DES_ROUTE4_MAX 64
+	NR_DES_DNS4_MAX 4
+	NR_DNS4_MAX 16
 
 If a host exceeds a limit, netrec prints a specific internal-limit error instead
 of a misleading generic ENOSPC message.
