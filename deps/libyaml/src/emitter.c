@@ -24,17 +24,7 @@
  */
 
 #define PUT_BREAK(emitter)                                                      \
-    (FLUSH(emitter)                                                             \
-     && ((emitter->line_break == YAML_CR_BREAK ?                                \
-             (*(emitter->buffer.pointer++) = (yaml_char_t) '\r') :              \
-          emitter->line_break == YAML_LN_BREAK ?                                \
-             (*(emitter->buffer.pointer++) = (yaml_char_t) '\n') :              \
-          emitter->line_break == YAML_CRLN_BREAK ?                              \
-             (*(emitter->buffer.pointer++) = (yaml_char_t) '\r',                \
-              *(emitter->buffer.pointer++) = (yaml_char_t) '\n') : 0),          \
-         emitter->column = 0,                                                   \
-         emitter->line ++,                                                      \
-         1))
+    yaml_emitter_put_break(emitter)
 
 /*
  * Copy a character from a string into buffer.
@@ -74,6 +64,9 @@ yaml_emitter_emit(yaml_emitter_t *emitter, yaml_event_t *event);
 
 static int
 yaml_emitter_set_emitter_error(yaml_emitter_t *emitter, const char *problem);
+
+static int
+yaml_emitter_put_break(yaml_emitter_t *emitter);
 
 static int
 yaml_emitter_need_more_events(yaml_emitter_t *emitter);
@@ -259,6 +252,31 @@ yaml_emitter_write_literal_scalar(yaml_emitter_t *emitter,
 static int
 yaml_emitter_write_folded_scalar(yaml_emitter_t *emitter,
         yaml_char_t *value, size_t length);
+
+/*
+ * Put a line break to the output buffer.
+ */
+
+static int
+yaml_emitter_put_break(yaml_emitter_t *emitter)
+{
+    if (!FLUSH(emitter))
+        return 0;
+
+    if (emitter->line_break == YAML_CR_BREAK)
+        *(emitter->buffer.pointer++) = (yaml_char_t) '\r';
+    else if (emitter->line_break == YAML_LN_BREAK)
+        *(emitter->buffer.pointer++) = (yaml_char_t) '\n';
+    else if (emitter->line_break == YAML_CRLN_BREAK) {
+        *(emitter->buffer.pointer++) = (yaml_char_t) '\r';
+        *(emitter->buffer.pointer++) = (yaml_char_t) '\n';
+    }
+
+    emitter->column = 0;
+    emitter->line ++;
+
+    return 1;
+}
 
 /*
  * Set an emitter error and return 0.
