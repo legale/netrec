@@ -477,6 +477,7 @@ static int load_doc(yaml_document_t *doc, struct desired_state *ds)
 {
 	/* Сначала scenario, потом только нужные секции этого scenario. */
 	yaml_node_t *root;
+	yaml_node_t *up;
 	int rc;
 
 	root = yaml_document_get_root_node(doc);
@@ -508,7 +509,8 @@ static int load_doc(yaml_document_t *doc, struct desired_state *ds)
 		}
 	} else if (!strcmp(ds->scenario, "wg_vxlan_bridge")) {
 		rc = load_bridge(doc, root, ds);
-		if (!rc) {
+		up = map_get(doc, root, "uplink");
+		if (!rc && up) {
 			rc = load_uplink(doc, root, ds);
 		}
 		if (!rc) {

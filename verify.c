@@ -774,7 +774,9 @@ static int verify_wg_vxlan_bridge(const struct desired_state *ds,
 	diff += check_bridge_addr(ds, rs, ctx);
 	diff += check_bridge_gateway(ds, rs, ctx);
 	diff += check_bridge_dns(ds, rs, ctx);
-	diff += verify_only_uplink(ds, rs, ctx);
+	if (ds->up_ifname[0]) {
+		diff += verify_only_uplink(ds, rs, ctx);
+	}
 	diff += check_bridge_ports(ds, rs, ctx);
 	diff += check_wg_peer_route(ds, rs, ctx);
 

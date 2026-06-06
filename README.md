@@ -3,9 +3,9 @@ netrec
 
 One-shot reconcile utility for Linux/Debian/OpenWrt-like systems.
 
-Default mode is dry-run. netrec reads desired state from YAML, reads real state
-from the kernel through rtnetlink, prints OK/MISS lines and ACT commands.
-Without --apply it does not change the system.
+Default mode is dry-run. netrec reads desired state from YAML or from UCI dump
+files, reads real state from the kernel through rtnetlink, prints OK/MISS lines
+and ACT commands. Without --apply it does not change the system.
 
 Build:
 
@@ -18,6 +18,11 @@ Fast check:
 Run dry-run:
 
 	./netrec -c examples/wg_vxlan_bridge.yaml
+
+Run UCI fixture dry-run:
+
+	./netrec --source uci --uci-network uci/uci.network \
+		--uci-wireless uci/uci.wireless
 
 Run apply:
 
@@ -168,7 +173,7 @@ wg_vxlan_bridge
 Checks/actions:
 
 	bridge checks from uplink_bridge
-	uplink checks from uplink_bridge
+	uplink checks from uplink_bridge if uplink is configured
 	exact route peer_ip/32 over route_dev exists
 	wg iface exists
 	wg iface is up
@@ -199,7 +204,9 @@ Limits:
 	bridge.ports supports 0..32 additional bridge member interfaces
 	routes supports 0..64 IPv4 routes
 	no daemon mode
-	no UCI, JSON, Wi-Fi, firewall, netifd integration
+	UCI input adapter currently covers bridge/static, bridge/dhcp,
+	bridge+wg+vxlan and wireless bridge members
+	no JSON, firewall, netifd integration
 	DNS apply is not implemented; only /etc/resolv.conf check exists
 	WireGuard keys/peers are not checked
 	DHCP success is detected only as any IPv4 address on the bridge iface

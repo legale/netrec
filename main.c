@@ -7,12 +7,16 @@
 
 #include "netlink.h"
 #include "state.h"
+#include "uci.h"
 #include "verify.h"
 #include "yaml.h"
 
 static void usage(const char *prog)
 {
-	fprintf(stderr, "usage: %s [-a|--apply] -c config.yaml\n", prog);
+	fprintf(stderr,
+		"usage: %s [-a|--apply] [-c config.yaml] "
+		"[--source yaml|uci] [--uci-network path --uci-wireless path]\n",
+		prog);
 }
 
 static int apply_lock(void)
@@ -83,6 +87,9 @@ int main(int argc, char **argv)
 {
 	struct desired_set set;
 	const char *cfg = NULL;
+	const char *source = "yaml";
+	const char *uci_network = NULL;
+	const char *uci_wireless = NULL;
 	int act_fail = 0;
 	int lock_fd = -1;
 	int apply = 0;
@@ -100,19 +107,46 @@ int main(int argc, char **argv)
 			cfg = argv[++i];
 			continue;
 		}
+		if (!strcmp(argv[i], "--source") && i + 1 < argc) {
+			source = argv[++i];
+			continue;
+		}
+		if (!strcmp(argv[i], "--uci-network") && i + 1 < argc) {
+			uci_network = argv[++i];
+			continue;
+		}
+		if (!strcmp(argv[i], "--uci-wireless") && i + 1 < argc) {
+			uci_wireless = argv[++i];
+			continue;
+		}
 
 		usage(argv[0]);
 		return 2;
 	}
 
-	if (!cfg) {
-		usage(argv[0]);
-		return 2;
-	}
+	if (!strcmp(source, "yaml")) {
+		if (!cfg) {
+			usage(argv[0]);
+			return 2;
+		}
 
-	rc = yaml_load_desired_set(cfg, &set);
-	if (rc) {
-		return 1;
+		rc = yaml_load_desired_set(cfg, &set);
+		if (rc) {
+			return 1;
+		}
+	} else if (!strcmp(source, "uci")) {
+		if (!uci_network || !uci_wireless) {
+			usage(argv[0]);
+			return 2;
+		}
+
+		rc = uci_load_desired_set(uci_network, uci_wireless, &set);
+		if (rc) {
+			return 1;
+		}
+	} else {
+		fprintf(stderr, "source: unsupported %s\n", source);
+		return 2;
 	}
 
 	if (apply) {

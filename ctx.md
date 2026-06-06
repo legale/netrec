@@ -300,10 +300,11 @@ Rules:
     wg.route_dev must equal bridge.name
     vxlan.dev must equal wg.ifname
     vxlan.bridge must equal bridge.name
+    uplink section is optional
 
 Checks/actions:
 
-    all uplink_bridge checks/actions except uplink master is not forced
+    all uplink_bridge checks/actions if uplink is configured
     exact route wg.peer_ip/32 dev wg.route_dev exists
     wg iface exists
     wg iface is up
@@ -481,6 +482,18 @@ Current result after desired_set prep on 2026-06-07:
 
     make check
     rc=0
+
+Current UCI scope on 2026-06-07:
+
+    file-based UCI input adapter exists
+    input is uci show network + uci show wireless dumps
+    adapter fills desired_set and keeps verifier UCI-agnostic
+    current bridge coverage:
+        static bridge -> uplink_bridge
+        dhcp bridge -> uplink_bridge
+        proto none bridge with vxlan port + matching wireguard peer -> wg_vxlan_bridge
+    wireless wifi-iface entries are added to bridge.ports by matching wireless.network
+    live uci execution is not added yet
 
 ## Apply behavior
 

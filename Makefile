@@ -8,7 +8,7 @@ WARN := -Wall -Wextra
 
 APP := netrec
 APP_STATIC := $(APP)-static
-APP_OBJS := main.o yaml.o state.o netlink.o verify.o
+APP_OBJS := main.o yaml.o uci.o state.o netlink.o verify.o
 YAML_SRCS := \
 	deps/libyaml/src/api.c \
 	deps/libyaml/src/reader.c \
