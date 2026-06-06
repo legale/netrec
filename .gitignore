@@ -1,0 +1,3 @@
+*.o
+/netrec
+/netrec-static
