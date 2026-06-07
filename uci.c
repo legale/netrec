@@ -25,8 +25,7 @@ struct uci_db {
   int n_item;
 };
 
-static void cpy(char *dst, size_t sz, const char *src)
-{
+static void cpy(char *dst, size_t sz, const char *src) {
   size_t len;
 
   if (!sz)
@@ -45,8 +44,7 @@ static void cpy(char *dst, size_t sz, const char *src)
   dst[len] = '\0';
 }
 
-static void trim_eol(char *s)
-{
+static void trim_eol(char *s) {
   size_t len;
 
   len = strlen(s);
@@ -54,8 +52,7 @@ static void trim_eol(char *s)
     s[--len] = '\0';
 }
 
-static void strip_quotes(char *s)
-{
+static void strip_quotes(char *s) {
   size_t len;
 
   len = strlen(s);
@@ -65,8 +62,7 @@ static void strip_quotes(char *s)
   }
 }
 
-static int next_word(const char **src, char *dst, size_t sz)
-{
+static int next_word(const char **src, char *dst, size_t sz) {
   const char *s;
   size_t len;
 
@@ -92,8 +88,7 @@ static int next_word(const char **src, char *dst, size_t sz)
   return 1;
 }
 
-static int value_has_token(const char *val, const char *token)
-{
+static int value_has_token(const char *val, const char *token) {
   const char *p;
   char word[UCI_VAL_SZ];
   int rc;
@@ -111,9 +106,7 @@ static int value_has_token(const char *val, const char *token)
   }
 }
 
-static int db_add(struct uci_db *db, const char *pkg, const char *sect,
-                  const char *opt, const char *val, int is_type)
-{
+static int db_add(struct uci_db *db, const char *pkg, const char *sect, const char *opt, const char *val, int is_type) {
   struct uci_item *it;
 
   if (db->n_item >= NR_UCI_ITEM_MAX) {
@@ -131,8 +124,7 @@ static int db_add(struct uci_db *db, const char *pkg, const char *sect,
   return 0;
 }
 
-static int db_load_file(struct uci_db *db, const char *path)
-{
+static int db_load_file(struct uci_db *db, const char *path) {
   char line[1024];
   FILE *f;
 
@@ -230,9 +222,7 @@ static int db_load_file(struct uci_db *db, const char *path)
   return 0;
 }
 
-static const char *db_get(const struct uci_db *db, const char *pkg,
-                          const char *sect, const char *opt)
-{
+static const char *db_get(const struct uci_db *db, const char *pkg, const char *sect, const char *opt) {
   int i;
 
   for (i = db->n_item - 1; i >= 0; i--) {
@@ -250,9 +240,7 @@ static const char *db_get(const struct uci_db *db, const char *pkg,
   return NULL;
 }
 
-static const char *find_iface_by_device(const struct uci_db *db,
-                                        const char *br_name)
-{
+static const char *find_iface_by_device(const struct uci_db *db, const char *br_name) {
   int i;
 
   for (i = 0; i < db->n_item; i++) {
@@ -280,8 +268,7 @@ static const char *find_iface_by_device(const struct uci_db *db,
   return NULL;
 }
 
-static int add_bridge_port(struct desired_state *ds, const char *ifname)
-{
+static int add_bridge_port(struct desired_state *ds, const char *ifname) {
   int i;
 
   if (!ifname || !ifname[0])
@@ -307,9 +294,7 @@ static int add_bridge_port(struct desired_state *ds, const char *ifname)
   return 0;
 }
 
-static int add_wireless_ports(const struct uci_db *db, const char *net_name,
-                              struct desired_state *ds)
-{
+static int add_wireless_ports(const struct uci_db *db, const char *net_name, struct desired_state *ds) {
   int i;
 
   for (i = 0; i < db->n_item; i++) {
@@ -345,8 +330,7 @@ static int add_wireless_ports(const struct uci_db *db, const char *net_name,
   return 0;
 }
 
-static int mask_to_prefix(const char *mask, int *prefix)
-{
+static int mask_to_prefix(const char *mask, int *prefix) {
   struct in_addr in;
   uint32_t v;
   int bits;
@@ -380,9 +364,7 @@ static int mask_to_prefix(const char *mask, int *prefix)
   return 0;
 }
 
-static int split_ip_list(const char *src, char dst[][INET_ADDRSTRLEN],
-                         int *nr, int max, const char *tag)
-{
+static int split_ip_list(const char *src, char dst[][INET_ADDRSTRLEN], int *nr, int max, const char *tag) {
   const char *p;
   char word[32];
   int n;
@@ -414,8 +396,7 @@ static int split_ip_list(const char *src, char dst[][INET_ADDRSTRLEN],
   return 0;
 }
 
-static int parse_u32_str(const char *s, uint32_t *v)
-{
+static int parse_u32_str(const char *s, uint32_t *v) {
   char *end;
   unsigned long n;
 
@@ -431,8 +412,7 @@ static int parse_u32_str(const char *s, uint32_t *v)
   return 0;
 }
 
-static int add_state(struct desired_set *set, struct desired_state **ds)
-{
+static int add_state(struct desired_set *set, struct desired_state **ds) {
   if (set->n_state >= NR_DES_STATE_MAX) {
     fprintf(stderr, "uci: too many desired states, max=%d\n",
             NR_DES_STATE_MAX);
@@ -444,9 +424,7 @@ static int add_state(struct desired_set *set, struct desired_state **ds)
   return 0;
 }
 
-static int fill_bridge_proto(const struct uci_db *db, const char *if_sect,
-                             struct desired_state *ds)
-{
+static int fill_bridge_proto(const struct uci_db *db, const char *if_sect, struct desired_state *ds) {
   const char *dns;
   const char *gateway;
   const char *ipaddr;
@@ -510,9 +488,7 @@ static int fill_bridge_proto(const struct uci_db *db, const char *if_sect,
   return -EINVAL;
 }
 
-static int add_device_ports(const char *ports, struct desired_state *ds,
-                            int skip_first)
-{
+static int add_device_ports(const char *ports, struct desired_state *ds, int skip_first) {
   const char *p;
   char word[IFNAMSIZ];
   int first;
@@ -542,8 +518,7 @@ static int add_device_ports(const char *ports, struct desired_state *ds,
   }
 }
 
-static int first_device_port(const char *ports, char *dst, size_t sz)
-{
+static int first_device_port(const char *ports, char *dst, size_t sz) {
   const char *p;
   int rc;
 
@@ -559,9 +534,7 @@ static int first_device_port(const char *ports, char *dst, size_t sz)
   return 0;
 }
 
-static int find_wg_for_remote(const struct uci_db *db, const char *remote,
-                              char *wg_ifname, size_t sz)
-{
+static int find_wg_for_remote(const struct uci_db *db, const char *remote, char *wg_ifname, size_t sz) {
   char remote32[32];
   int found;
   int i;
@@ -622,8 +595,7 @@ static int find_wg_for_remote(const struct uci_db *db, const char *remote,
 static int build_uplink_bridge(const struct uci_db *net,
                                const struct uci_db *wifi,
                                const char *dev_sect, const char *if_sect,
-                               const char *br_name, struct desired_set *set)
-{
+                               const char *br_name, struct desired_set *set) {
   struct desired_state *ds;
   const char *ports;
   int rc;
@@ -657,8 +629,7 @@ static int build_uplink_bridge(const struct uci_db *net,
 static int build_wg_vxlan_bridge(const struct uci_db *net,
                                  const struct uci_db *wifi,
                                  const char *dev_sect, const char *if_sect,
-                                 const char *br_name, struct desired_set *set)
-{
+                                 const char *br_name, struct desired_set *set) {
   struct desired_state *ds;
   const char *peeraddr;
   const char *ports;
@@ -721,9 +692,7 @@ static int build_wg_vxlan_bridge(const struct uci_db *net,
   return add_wireless_ports(wifi, if_sect, ds);
 }
 
-int uci_load_desired_set(const char *network_path, const char *wireless_path,
-                         struct desired_set *set)
-{
+int uci_load_desired_set(const char *network_path, const char *wireless_path, struct desired_set *set) {
   struct uci_db net;
   struct uci_db wifi;
   int i;
@@ -760,8 +729,7 @@ int uci_load_desired_set(const char *network_path, const char *wireless_path,
 
     br_name = db_get(&net, "network", net.item[i].sect, "name");
     if (!br_name || !br_name[0]) {
-      fprintf(stderr, "uci: bridge device %s missing name\n",
-              net.item[i].sect);
+      fprintf(stderr, "uci: bridge device %s missing name\n", net.item[i].sect);
       return -EINVAL;
     }
 
@@ -773,20 +741,16 @@ int uci_load_desired_set(const char *network_path, const char *wireless_path,
 
     proto = db_get(&net, "network", if_sect, "proto");
     if (!proto || !proto[0]) {
-      fprintf(stderr, "uci: bridge %s missing proto on network.%s\n",
-              br_name, if_sect);
+      fprintf(stderr, "uci: bridge %s missing proto on network.%s\n", br_name, if_sect);
       return -EINVAL;
     }
 
     if (!strcmp(proto, "static") || !strcmp(proto, "dhcp")) {
-      rc = build_uplink_bridge(&net, &wifi, net.item[i].sect, if_sect,
-                               br_name, set);
+      rc = build_uplink_bridge(&net, &wifi, net.item[i].sect, if_sect, br_name, set);
     } else if (!strcmp(proto, "none")) {
-      rc = build_wg_vxlan_bridge(&net, &wifi, net.item[i].sect, if_sect,
-                                 br_name, set);
+      rc = build_wg_vxlan_bridge(&net, &wifi, net.item[i].sect, if_sect, br_name, set);
     } else {
-      fprintf(stderr, "uci: unsupported bridge proto=%s on %s\n", proto,
-              br_name);
+      fprintf(stderr, "uci: unsupported bridge proto=%s on %s\n", proto, br_name);
       return -EINVAL;
     }
 
