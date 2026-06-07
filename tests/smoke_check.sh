@@ -67,7 +67,7 @@ grep -q 'route 100.100.2.1/32 dev wg1' "$tmp/out" || {
 	cat "$tmp/out"
 	exit 1
 }
-grep -q 'ip link add wan_vx3 type vxlan id 3 remote 100.100.2.1 dev wg1' \
+grep -q 'ip link add wan_vx3 type vxlan id 3 remote 100.100.2.1' \
 	"$tmp/out" || {
 	echo "FAIL uci vxlan"
 	cat "$tmp/out"

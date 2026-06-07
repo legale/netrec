@@ -563,8 +563,14 @@ static int check_bridge_ports(const struct desired_state *ds,
 
 static void act_add_vxlan(const struct desired_state *ds, struct vctx *ctx)
 {
-	act(ctx, "ip link add %s type vxlan id %u remote %s dev %s",
-	    ds->vx_ifname, ds->vx_vni, ds->vx_remote, ds->vx_dev);
+	if (ds->vx_dev[0]) {
+		act(ctx, "ip link add %s type vxlan id %u remote %s dev %s",
+		    ds->vx_ifname, ds->vx_vni, ds->vx_remote, ds->vx_dev);
+		return;
+	}
+
+	act(ctx, "ip link add %s type vxlan id %u remote %s",
+	    ds->vx_ifname, ds->vx_vni, ds->vx_remote);
 }
 
 static int check_vxlan_attrs(const struct desired_state *ds,
@@ -573,7 +579,7 @@ static int check_vxlan_attrs(const struct desired_state *ds,
 			     const struct vxlan *vx,
 			     struct vctx *ctx, int *recreate)
 {
-	/* VNI/remote/dev нельзя безопасно менять частично: проще пересоздать. */
+	/* VNI/remote/dev считаем immutable; diff => recreate. */
 	const struct iface *dev;
 	uint32_t remote;
 	int diff = 0;
@@ -616,13 +622,15 @@ static int check_vxlan_attrs(const struct desired_state *ds,
 		*recreate = 1;
 	}
 
-	dev = rs_find_iface(rs, ds->vx_dev);
-	if (dev && vx->has_link && vx->link == dev->ifindex) {
-		ok("vxlan %s dev %s", ds->vx_ifname, ds->vx_dev);
-	} else {
-		miss("vxlan %s dev %s", ds->vx_ifname, ds->vx_dev);
-		diff++;
-		*recreate = 1;
+	if (ds->vx_dev[0]) {
+		dev = rs_find_iface(rs, ds->vx_dev);
+		if (dev && vx->has_link && vx->link == dev->ifindex) {
+			ok("vxlan %s dev %s", ds->vx_ifname, ds->vx_dev);
+		} else {
+			miss("vxlan %s dev %s", ds->vx_ifname, ds->vx_dev);
+			diff++;
+			*recreate = 1;
+		}
 	}
 
 	if (*recreate) {

@@ -180,10 +180,13 @@ Checks/actions:
 	vxlan iface exists and type is vxlan
 	vxlan vni matches
 	vxlan remote matches
-	vxlan parent dev matches wg iface
+	optional vxlan parent dev matches wg iface
 	vxlan is up
 	vxlan master is bridge
 	optional routes[]
+
+`vxlan.dev` is optional. If it is omitted, verifier does not require a parent
+link and `ip link add ... type vxlan` is emitted without `dev`.
 
 Optional routes:
 

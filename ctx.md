@@ -298,7 +298,7 @@ YAML:
 Rules:
 
     wg.route_dev is explicit and can differ from bridge.name
-    vxlan.dev must equal wg.ifname
+    vxlan.dev is optional; if set, it must equal wg.ifname
     vxlan.bridge must equal bridge.name
     uplink section is optional
 
@@ -311,7 +311,7 @@ Checks/actions:
     vxlan iface exists and type is vxlan
     vxlan vni matches
     vxlan remote matches
-    vxlan parent dev matches wg iface
+    optional vxlan parent dev matches wg iface
     vxlan is up
     vxlan master is bridge
     optional routes[]
@@ -320,7 +320,7 @@ VXLAN vni/remote/dev are treated as immutable. If wrong, verifier emits recreate
 actions:
 
     ip link del <vxlan>
-    ip link add <vxlan> type vxlan id <vni> remote <remote> dev <dev>
+    ip link add <vxlan> type vxlan id <vni> remote <remote> [dev <dev>]
     ip link set <vxlan> up
     ip link set <vxlan> master <bridge>
 
