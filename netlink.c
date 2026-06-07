@@ -14,11 +14,15 @@
 #include "netlink.h"
 
 #ifndef IFLA_VXLAN_MAX
-#define IFLA_VXLAN_MAX 0
+#define IFLA_VXLAN_ID 1
+#define IFLA_VXLAN_GROUP 2
+#define IFLA_VXLAN_LINK 3
+#define IFLA_VXLAN_MAX 3
 #endif
 
 #ifndef IFLA_VLAN_MAX
-#define IFLA_VLAN_MAX 0
+#define IFLA_VLAN_ID 1
+#define IFLA_VLAN_MAX 1
 #endif
 
 
@@ -234,27 +238,21 @@ static int add_vxlan(struct real_state *rs, struct ifinfomsg *ifi,
 	len = RTA_PAYLOAD(li[IFLA_INFO_DATA]);
 	parse_rtattr(vx, IFLA_VXLAN_MAX, RTA_DATA(li[IFLA_INFO_DATA]), len);
 
-#ifdef IFLA_VXLAN_ID
 	if (vx[IFLA_VXLAN_ID] &&
 	    RTA_PAYLOAD(vx[IFLA_VXLAN_ID]) >= sizeof(uint32_t)) {
 		v->has_vni = 1;
 		v->vni = *(uint32_t *)RTA_DATA(vx[IFLA_VXLAN_ID]);
 	}
-#endif
-#ifdef IFLA_VXLAN_GROUP
 	if (vx[IFLA_VXLAN_GROUP] &&
 	    RTA_PAYLOAD(vx[IFLA_VXLAN_GROUP]) >= sizeof(uint32_t)) {
 		v->has_remote = 1;
 		v->remote = *(uint32_t *)RTA_DATA(vx[IFLA_VXLAN_GROUP]);
 	}
-#endif
-#ifdef IFLA_VXLAN_LINK
 	if (vx[IFLA_VXLAN_LINK] &&
 	    RTA_PAYLOAD(vx[IFLA_VXLAN_LINK]) >= sizeof(uint32_t)) {
 		v->has_link = 1;
 		v->link = *(uint32_t *)RTA_DATA(vx[IFLA_VXLAN_LINK]);
 	}
-#endif
 
 	return 0;
 }
@@ -305,13 +303,11 @@ static int add_vlan(struct real_state *rs, struct ifinfomsg *ifi,
 	len = RTA_PAYLOAD(li[IFLA_INFO_DATA]);
 	parse_rtattr(vl, IFLA_VLAN_MAX, RTA_DATA(li[IFLA_INFO_DATA]), len);
 
-#ifdef IFLA_VLAN_ID
 	if (vl[IFLA_VLAN_ID] &&
 	    RTA_PAYLOAD(vl[IFLA_VLAN_ID]) >= sizeof(uint16_t)) {
 		v->has_id = 1;
 		v->id = *(uint16_t *)RTA_DATA(vl[IFLA_VLAN_ID]);
 	}
-#endif
 
 	return 0;
 }
