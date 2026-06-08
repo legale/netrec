@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
   const char *uci_network = NULL;
   const char *uci_wireless = NULL;
   int apply = 0;
-  int debounce_ms = 0;
+  int debounce_ms = -1;
   int watch = 0;
   int i;
   int rc;

@@ -122,12 +122,20 @@ Return code:
             return 0 only if no MISS remains
 
     watch.c
-        run nlmon in background thread
-        subscribe to link events
-        wake local pipe on every callback
-        collect burst events during debounce window
-        re-run netrec_run_once() once per coalesced burst
-        SIGINT/SIGTERM stop foreground loop cleanly
+        provides both standalone and embedded watch lifecycle
+        netrec_watch_open()
+            create watch object and wake pipe
+        netrec_watch_loop()
+            optionally install SIGINT/SIGTERM handlers
+            optionally own nlmon_run()/nlmon_stop()
+            subscribe to link events
+            wake local pipe on every callback
+            collect burst events during debounce window
+            re-run netrec_run_once() once per coalesced burst
+        netrec_watch_stop()
+            stop watch loop from another thread
+        netrec_watch_close()
+            release watch object after loop exit
 
     yaml.c
         yaml_load_desired_set()
@@ -566,6 +574,14 @@ Current result after live-UCI self-fetch on 2026-06-08:
     fixture mode through --uci-network/--uci-wireless is kept unchanged
     watch path switched from nlmon_add_filter/remove_filter
     to nlmon_subscribe/unsubscribe
+
+Current result after embedded-watch prep on 2026-06-08:
+
+    watch.c no longer hardcodes signal-only shutdown
+    same watch core now works in two modes:
+        standalone utility owns signals and nlmon lifecycle
+        embedded caller owns thread lifecycle and can stop watch explicitly
+    this is the path used by upcoming wda embedded integration
 
 Current UCI scope on 2026-06-07:
 
