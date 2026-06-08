@@ -17,7 +17,7 @@ ctx.md является рабочим контекстом для продол�
 
 ## Текущая цель проекта
 
-netrec - one-shot reconciler для Linux/Debian/OpenWrt-like систем.
+netrec - reconciler для Linux/Debian/OpenWrt-like систем.
 
 Задача:
 
@@ -28,9 +28,15 @@ netrec - one-shot reconciler для Linux/Debian/OpenWrt-like систем.
     по --apply выполнять заранее сформированные repair actions
     после --apply повторно снять real_state и убедиться, что state сошелся
 
-netrec не является daemon и не содержит event loop. Внешний watcher, cron,
-systemd/openrc/procd hook или IvanDriver могут запускать netrec при событии.
-Событие не должно содержать бизнес-логику ремонта. Событие только причина
+По умолчанию netrec работает как one-shot utility.
+
+Также теперь есть foreground daemon/watch mode:
+
+    подписка на kernel netlink события через mod/nlmon
+    внутренний debounce по burst-событиям
+    повторный полный snapshot kernel state и прогон verifier после debounce
+
+watch mode не содержит отдельной бизнес-логики ремонта. Событие только причина
 заново снять полный kernel snapshot и прогнать verifier.
 
 ## Текущая команда запуска
@@ -44,6 +50,11 @@ Apply:
     ./netrec --apply -c config.yaml
     ./netrec -a -c config.yaml
 
+Watch:
+
+    ./netrec --watch --debounce-ms 800 --source uci --uci-network /tmp/uci.network --uci-wireless /tmp/uci.wireless
+    ./netrec --daemon --debounce-ms 800 --source uci --uci-network /tmp/uci.network --uci-wireless /tmp/uci.wireless
+
 Return code:
 
     0 - diff нет, apply failures нет, post-apply verify сошелся
@@ -55,6 +66,9 @@ Return code:
 Файлы верхнего уровня:
 
     main.c
+    log.h
+    run.c / run.h
+    watch.c / watch.h
     cfg.c / cfg.h
     yaml.c / yaml.h
     state.c / state.h
@@ -72,16 +86,36 @@ Return code:
         parse argv
         -c config.yaml required
         default mode is dry-run
+        --watch / --daemon enables foreground event loop
+        --debounce-ms sets watch-mode debounce timeout
         --apply / -a enables execution of ACT commands
-        for --apply acquire /tmp/netrec.lock with flock LOCK_EX | LOCK_NB
+        setup_syslog2("netrec", LOG_NOTICE, true)
+        one-shot path goes through run.c
+        watch path goes through watch.c
+
+    log.h
+        thin local wrapper over syslog2
+        verifier output stays on stdout
+        service/error logs go through syslog2
+
+    run.c
         load desired_set
         load real_state through rtnetlink
         run verifier for each desired_state from the set over one real_state snapshot
+        for --apply acquire /tmp/netrec.lock with flock LOCK_EX | LOCK_NB
         if --apply and actions succeeded and diff existed:
             print POST_VERIFY
             reload real_state
             run verifier for the same desired_set again in dry-run mode
             return 0 only if no MISS remains
+
+    watch.c
+        run nlmon in background thread
+        subscribe to link events
+        wake local pipe on every callback
+        collect burst events during debounce window
+        re-run netrec_run_once() once per coalesced burst
+        SIGINT/SIGTERM stop foreground loop cleanly
 
     yaml.c
         yaml_load_desired_set()
@@ -547,8 +581,6 @@ truncating state.
 
 ## Current non-goals
 
-    daemon mode
-    event loop
     UCI parser
     JSON parser
     firewall
@@ -564,8 +596,8 @@ truncating state.
 
 ## Important design choices
 
-One-shot reconciler is intentional. External event systems should not encode
-repair logic. They should only trigger netrec.
+One-shot reconciler remains the base execution model. watch mode only adds
+event collection and debounce around the same full-snapshot verifier path.
 
 Verifier owns the repair plan. The same verifier prints dry-run ACT and executes
 those ACT commands in --apply. This keeps dry-run and apply behavior aligned.
@@ -604,10 +636,10 @@ VXLAN/VLAN creation depends on kernel support and iproute2 support.
 
 ## Next minimal work
 
-    add UCI input adapter that fills desired_set but does not leak UCI into verifier
     add route dst canonicalization or reject non-canonical dst
     add explicit command length overflow detection in act()
     add tests for YAML validation failures
+    add watch-mode integration test with controlled netlink burst
     add netns route/apply tests on a host with CAP_NET_ADMIN
     decide whether static addr should use ip addr replace/flush policy
     decide whether to support extra route deletion later
@@ -621,16 +653,16 @@ VXLAN/VLAN creation depends on kernel support and iproute2 support.
 Граница ответственности:
 
     wda получает событие или видит подозрение на рассинхрон
-    wda ставит reconcile_needed
-    debounce timer запускает netrec
-    netrec сам читает desired YAML
+    wda запускает netrec one-shot или управляет его daemon/watch mode
+    debounce может жить либо в wda runner, либо внутри netrec watch mode
+    netrec сам читает desired YAML/UCI
     netrec сам снимает полный real_state
     netrec сам печатает OK/MISS/ACT
     netrec сам делает --apply и POST_VERIFY, если режим apply включен
     wda только логирует rc/output и обновляет метрики
 
-Не запускать netrec на каждый netlink/ubus event напрямую. Нужен debounce, иначе
-будет storm и ложные гонки между netifd, kernel и netrec.
+Не запускать reconcile на каждый netlink/ubus event напрямую. Нужен debounce,
+иначе будет storm и ложные гонки между netifd, kernel и netrec.
 
 Минимальный режим запуска из wda:
 

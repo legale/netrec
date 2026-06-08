@@ -1,12 +1,12 @@
 netrec
 ======
 
-One-shot reconcile utility for Linux/Debian/OpenWrt-like systems.
+Reconcile utility for Linux/Debian/OpenWrt-like systems.
 
-Default mode is dry-run. netrec reads desired state from a simple line-based
-config or from UCI dump
-files, reads real state from the kernel through rtnetlink, prints OK/MISS lines
-and ACT commands. Without --apply it does not change the system.
+Default mode is one-shot dry-run. netrec reads desired state from a simple
+line-based config or from UCI dump files, reads real state from the kernel
+through rtnetlink, prints OK/MISS lines and ACT commands. Without --apply it
+does not change the system.
 
 The config format is intentionally strict and small. One line is one assignment:
 
@@ -38,6 +38,14 @@ Run equivalent multi-scenario fixture:
 
 	./netrec -c examples/uci_fixture.yaml
 
+Run watch mode with internal debounce:
+
+	./netrec --watch --debounce-ms 800 --source uci --uci-network uci/uci.network \
+		--uci-wireless uci/uci.wireless
+
+`--daemon` is an alias of `--watch`. netrec stays in foreground and is suitable
+for procd/systemd supervision.
+
 Internal UCI conversion:
 
 	uci2yml(network_dump, wireless_dump, yaml_path)
@@ -53,6 +61,7 @@ Apply mode:
 	prints APPLY_OK or APPLY_FAIL for executed commands
 	after successful ACT execution reloads kernel state and runs dry-run verify
 	returns 0 only if post-apply verify has no MISS
+	service/error logs go through syslog2
 
 Supported scenarios:
 
@@ -221,11 +230,12 @@ Limits:
 	one bridge/uplink/vlan/wg/vxlan object per scenario
 	bridge.ports supports 0..32 additional bridge member interfaces
 	routes supports 0..64 IPv4 routes
-	no daemon mode
 	config input supports one scenario or `state.<id>...` multi-state layout
 	UCI desired_set path is UCI dump -> line-based cfg file -> loader
 	UCI input adapter currently covers bridge/static, bridge/dhcp,
 	bridge+wg+vxlan and wireless bridge members
+	watch mode currently listens only to kernel netlink events through nlmon
+	debounce is local to netrec watch mode
 	no JSON, firewall, netifd integration
 	DNS apply is not implemented; only /etc/resolv.conf check exists
 	WireGuard keys/peers are not checked
