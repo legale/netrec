@@ -75,6 +75,14 @@ int main(void) {
 
   if (expect_rc("neg oob", cfg_get_str(&cfg, "bridge.ports[-4]", &val), -ENOENT))
     return 1;
+  if (expect_rc("leading zero idx", cfg_get_str(&cfg, "bridge.ports[01]", &val), -EINVAL))
+    return 1;
+  if (expect_rc("bad key char", cfg_get_str(&cfg, "bridge-name", &val), -EINVAL))
+    return 1;
+  if (expect_rc("double dot", cfg_get_str(&cfg, "bridge..name", &val), -EINVAL))
+    return 1;
+  if (expect_rc("trailing dot", cfg_get_str(&cfg, "bridge.", &val), -EINVAL))
+    return 1;
   if (expect_rc("set hole", cfg_set_str(&cfg, "bridge.ports[3]", "wan"), -ENOENT))
     return 1;
   if (expect_rc("get container as str", cfg_get_str(&cfg, "bridge.ports", &val), -EISDIR))
@@ -120,6 +128,12 @@ int main(void) {
   if (expect_rc("write bad file", rc, 0))
     return 1;
   if (expect_rc("indexed load reject", cfg_load(&cfg2, tmp), -EINVAL))
+    return 1;
+
+  rc = write_file(tmp, "bridge.ports[01] = \"lan1\"\n");
+  if (expect_rc("write bad file 2", rc, 0))
+    return 1;
+  if (expect_rc("leading zero load reject", cfg_load(&cfg2, tmp), -EINVAL))
     return 1;
 
   unlink(tmp);

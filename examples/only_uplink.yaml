@@ -1,4 +1,2 @@
-scenario: only_uplink
-
-uplink:
-  ifname: eth0
+scenario = "only_uplink"
+uplink.ifname = "eth0"

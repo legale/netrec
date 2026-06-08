@@ -1,15 +1,9 @@
-scenario: uplink_bridge
-
-bridge:
-  name: br-lan
-  addr_mode: static
-  addr: 10.10.10.1/24
-  gateway: 10.10.10.254
-  dns:
-    - 192.0.2.53
-    - 192.0.2.54
-  ports:
-    - eth1
-
-uplink:
-  ifname: eth0
+scenario = "uplink_bridge"
+bridge.name = "br-lan"
+bridge.addr_mode = "static"
+bridge.addr = "10.10.10.1/24"
+bridge.gateway = "10.10.10.254"
+bridge.dns[] = "192.0.2.53"
+bridge.dns[] = "192.0.2.54"
+bridge.ports[] = "eth1"
+uplink.ifname = "eth0"

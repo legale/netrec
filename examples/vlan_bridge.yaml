@@ -1,17 +1,10 @@
-scenario: vlan_bridge
-
-bridge:
-  name: br-lan
-  addr: 10.10.10.1/24
-  ports:
-    - eth1
-    - eth2
-
-uplink:
-  ifname: eth0
-
-vlan:
-  ifname: eth0.100
-  id: 100
-  link: eth0
-  bridge: br-lan
+scenario = "vlan_bridge"
+bridge.name = "br-lan"
+bridge.addr = "10.10.10.1/24"
+bridge.ports[] = "eth1"
+bridge.ports[] = "eth2"
+uplink.ifname = "eth0"
+vlan.ifname = "eth0.100"
+vlan.id = "100"
+vlan.link = "eth0"
+vlan.bridge = "br-lan"

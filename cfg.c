@@ -1,4 +1,6 @@
+#include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,15 +10,15 @@
 #define CFG_PATH_SEG_MAX 128
 #define CFG_PATH_DEPTH_MAX 64
 
-enum cfg_idx_kind {
-  CFG_IDX_NONE,
-  CFG_IDX_ONE,
-  CFG_IDX_APPEND,
+enum cfg_tok_type {
+  CFG_TOK_KEY,
+  CFG_TOK_INDEX,
+  CFG_TOK_APPEND,
 };
 
-struct cfg_seg {
-  char name[CFG_PATH_SEG_MAX];
-  enum cfg_idx_kind idx_kind;
+struct cfg_tok {
+  enum cfg_tok_type type;
+  char key[CFG_PATH_SEG_MAX];
   int idx;
 };
 
@@ -129,59 +131,75 @@ static struct cfg_node *arr_nth(const struct cfg_node *arr, int idx) {
   return NULL;
 }
 
-static int parse_seg(const char **src, struct cfg_seg *seg) {
-  const char *p;
-  char *end;
-  size_t len;
-
-  memset(seg, 0, sizeof(*seg));
-
-  p = *src;
-  if (!*p)
-    return 0;
-
-  len = 0;
-  while (p[len] && p[len] != '.' && p[len] != '[') {
-    if (len + 1 >= sizeof(seg->name))
-      return -E2BIG;
-    seg->name[len] = p[len];
-    len++;
-  }
-
-  if (!len)
-    return -EINVAL;
-
-  seg->name[len] = '\0';
-  p += len;
-
-  if (*p == '[') {
-    p++;
-    if (*p == ']') {
-      seg->idx_kind = CFG_IDX_APPEND;
-      p++;
-    } else {
-      seg->idx_kind = CFG_IDX_ONE;
-      errno = 0;
-      seg->idx = strtol(p, &end, 10);
-      if (errno || end == p || *end != ']')
-        return -EINVAL;
-      p = end + 1;
-    }
-  }
-
-  if (*p == '.') {
-    p++;
-    if (!*p)
-      return -EINVAL;
-  } else if (*p) {
-    return -EINVAL;
-  }
-
-  *src = p;
-  return 1;
+static int is_key_start(int c) {
+  return isalpha((unsigned char)c) || c == '_';
 }
 
-static int parse_path(const char *path, struct cfg_seg *seg, int max, int *nr) {
+static int is_key_char(int c) {
+  return isalnum((unsigned char)c) || c == '_';
+}
+
+static int parse_key_tok(const char **src, struct cfg_tok *tok) {
+  const char *p;
+  size_t len;
+
+  p = *src;
+  if (!is_key_start(*p))
+    return -EINVAL;
+
+  memset(tok, 0, sizeof(*tok));
+  tok->type = CFG_TOK_KEY;
+
+  len = 0;
+  while (is_key_char(*p)) {
+    if (len + 1 >= sizeof(tok->key))
+      return -E2BIG;
+    tok->key[len++] = *p++;
+  }
+  tok->key[len] = '\0';
+  *src = p;
+  return 0;
+}
+
+static int parse_index_tok(const char **src, struct cfg_tok *tok) {
+  const char *p;
+  const char *digits;
+  char *end;
+  long idx;
+
+  p = *src;
+  if (*p != '[')
+    return -EINVAL;
+
+  p++;
+  memset(tok, 0, sizeof(*tok));
+
+  if (*p == ']') {
+    tok->type = CFG_TOK_APPEND;
+    *src = p + 1;
+    return 0;
+  }
+
+  tok->type = CFG_TOK_INDEX;
+  digits = p;
+  if (*p == '-')
+    p++;
+  if (!isdigit((unsigned char)*p))
+    return -EINVAL;
+  if (*p == '0' && isdigit((unsigned char)p[1]))
+    return -EINVAL;
+
+  errno = 0;
+  idx = strtol(digits, &end, 10);
+  if (errno || end == digits || *end != ']' || idx < INT_MIN || idx > INT_MAX)
+    return -EINVAL;
+
+  tok->idx = (int)idx;
+  *src = end + 1;
+  return 0;
+}
+
+static int parse_path(const char *path, struct cfg_tok *tok, int max, int *nr) {
   const char *p;
   int n;
   int rc;
@@ -192,12 +210,27 @@ static int parse_path(const char *path, struct cfg_seg *seg, int max, int *nr) {
 
   p = path;
   n = 0;
+
+  if (n >= max)
+    return -E2BIG;
+  rc = parse_key_tok(&p, &tok[n]);
+  if (rc)
+    return rc;
+  n++;
+
   while (*p) {
     if (n >= max)
       return -E2BIG;
-    rc = parse_seg(&p, &seg[n]);
-    if (rc <= 0)
-      return rc ? rc : -EINVAL;
+    if (*p == '.') {
+      p++;
+      rc = parse_key_tok(&p, &tok[n]);
+    } else if (*p == '[') {
+      rc = parse_index_tok(&p, &tok[n]);
+    } else {
+      return -EINVAL;
+    }
+    if (rc)
+      return rc;
     n++;
   }
 
@@ -206,19 +239,19 @@ static int parse_path(const char *path, struct cfg_seg *seg, int max, int *nr) {
 }
 
 static int path_file_ok(const char *path) {
-  struct cfg_seg seg[CFG_PATH_DEPTH_MAX];
+  struct cfg_tok tok[CFG_PATH_DEPTH_MAX];
   int i;
   int nr;
   int rc;
 
-  rc = parse_path(path, seg, CFG_PATH_DEPTH_MAX, &nr);
+  rc = parse_path(path, tok, CFG_PATH_DEPTH_MAX, &nr);
   if (rc)
     return rc;
 
   for (i = 0; i < nr; i++) {
-    if (seg[i].idx_kind == CFG_IDX_ONE)
+    if (tok[i].type == CFG_TOK_INDEX)
       return -EINVAL;
-    if (seg[i].idx_kind == CFG_IDX_APPEND && i + 1 != nr)
+    if (tok[i].type == CFG_TOK_APPEND && i + 1 != nr)
       return -EINVAL;
   }
 
@@ -226,68 +259,40 @@ static int path_file_ok(const char *path) {
 }
 
 static int walk_get(struct cfg *cfg, const char *path, struct cfg_node **out) {
-  struct cfg_seg seg[CFG_PATH_DEPTH_MAX];
+  struct cfg_tok tok[CFG_PATH_DEPTH_MAX];
   struct cfg_node *cur;
-  struct cfg_node *child;
-  int idx;
   int nr;
   int i;
   int rc;
+  int idx;
 
-  rc = parse_path(path, seg, CFG_PATH_DEPTH_MAX, &nr);
+  rc = parse_path(path, tok, CFG_PATH_DEPTH_MAX, &nr);
   if (rc)
     return rc;
 
   cur = &cfg->root;
   for (i = 0; i < nr; i++) {
-    if (cur->type != CFG_OBJ)
-      return -ENOTDIR;
-
-    child = obj_find(cur, seg[i].name);
-    if (!child)
-      return -ENOENT;
-
-    if (seg[i].idx_kind == CFG_IDX_APPEND)
+    if (tok[i].type == CFG_TOK_APPEND)
       return -EINVAL;
-    if (seg[i].idx_kind == CFG_IDX_ONE) {
-      rc = arr_idx(child, seg[i].idx, &idx);
-      if (rc)
-        return rc;
-      child = arr_nth(child, idx);
-      if (!child)
+
+    if (tok[i].type == CFG_TOK_KEY) {
+      if (cur->type != CFG_OBJ)
+        return -ENOTDIR;
+      cur = obj_find(cur, tok[i].key);
+      if (!cur)
         return -ENOENT;
+      continue;
     }
 
-    cur = child;
-  }
-
-  *out = cur;
-  return 0;
-}
-
-static int walk_parent(struct cfg *cfg, struct cfg_seg *seg, int nr, struct cfg_node **out) {
-  struct cfg_node *cur;
-  struct cfg_node *child;
-  int i;
-
-  cur = &cfg->root;
-  for (i = 0; i + 1 < nr; i++) {
-    if (seg[i].idx_kind != CFG_IDX_NONE)
-      return -EINVAL;
-    if (cur->type != CFG_OBJ)
+    if (cur->type != CFG_ARR)
       return -ENOTDIR;
 
-    child = obj_find(cur, seg[i].name);
-    if (!child) {
-      child = node_new(CFG_OBJ, seg[i].name);
-      if (!child)
-        return -ENOMEM;
-      child_add(cur, child);
-    } else if (child->type != CFG_OBJ) {
-      return -ENOTDIR;
-    }
-
-    cur = child;
+    rc = arr_idx(cur, tok[i].idx, &idx);
+    if (rc)
+      return rc;
+    cur = arr_nth(cur, idx);
+    if (!cur)
+      return -ENOENT;
   }
 
   *out = cur;
@@ -317,52 +322,41 @@ static int set_str_plain(struct cfg_node *parent, const char *name, const char *
   return 0;
 }
 
-static int set_str_arr(struct cfg_node *parent, const char *name, enum cfg_idx_kind kind, int idx, const char *val) {
-  struct cfg_node *arr;
+static int set_arr_append(struct cfg_node *arr, const char *val) {
+  struct cfg_node *node;
+  char *copy;
+
+  if (!arr || arr->type != CFG_ARR)
+    return -ENOTDIR;
+
+  node = node_new(CFG_STR, NULL);
+  if (!node)
+    return -ENOMEM;
+  copy = xstrdup(val);
+  if (!copy) {
+    node_free(node);
+    return -ENOMEM;
+  }
+  node->val = copy;
+  child_add(arr, node);
+  return 0;
+}
+
+static int set_arr_idx(struct cfg_node *arr, int idx, const char *val) {
   struct cfg_node *node;
   char *copy;
   int real_idx;
 
-  arr = obj_find(parent, name);
-  if (!arr) {
-    arr = node_new(CFG_ARR, name);
-    if (!arr)
-      return -ENOMEM;
-    child_add(parent, arr);
-  } else if (arr->type != CFG_ARR) {
+  if (!arr || arr->type != CFG_ARR)
     return -ENOTDIR;
-  }
-
-  if (kind == CFG_IDX_APPEND) {
-    node = node_new(CFG_STR, NULL);
-    if (!node)
-      return -ENOMEM;
-    copy = xstrdup(val);
-    if (!copy) {
-      node_free(node);
-      return -ENOMEM;
-    }
-    node->val = copy;
-    child_add(arr, node);
-    return 0;
-  }
-
-  if (kind != CFG_IDX_ONE)
-    return -EINVAL;
-
   if (idx >= 0 && idx == arr->n_child)
     return -ENOENT;
-
-  if (idx < 0 && !arr->n_child)
-    return -ENOENT;
-
   if (arr_idx(arr, idx, &real_idx))
     return -ENOENT;
 
   node = arr_nth(arr, real_idx);
   if (!node || node->type != CFG_STR)
     return -ENOENT;
-
   copy = xstrdup(val);
   if (!copy)
     return -ENOMEM;
@@ -372,14 +366,12 @@ static int set_str_arr(struct cfg_node *parent, const char *name, enum cfg_idx_k
   return 0;
 }
 
-static int del_arr(struct cfg_node *parent, const char *name, int idx) {
-  struct cfg_node *arr;
+static int del_arr(struct cfg_node *arr, int idx) {
   struct cfg_node *node;
   struct cfg_node *prev;
   int real_idx;
   int i;
 
-  arr = obj_find(parent, name);
   if (!arr || arr->type != CFG_ARR)
     return -ENOENT;
 
@@ -760,51 +752,114 @@ int cfg_arr_len(struct cfg *cfg, const char *path) {
 }
 
 int cfg_set_str(struct cfg *cfg, const char *path, const char *val) {
-  struct cfg_seg seg[CFG_PATH_DEPTH_MAX];
-  struct cfg_node *parent;
+  struct cfg_tok tok[CFG_PATH_DEPTH_MAX];
+  struct cfg_node *cur;
+  struct cfg_node *child;
+  enum cfg_type want;
   int nr;
+  int i;
   int rc;
 
-  rc = parse_path(path, seg, CFG_PATH_DEPTH_MAX, &nr);
+  rc = parse_path(path, tok, CFG_PATH_DEPTH_MAX, &nr);
   if (rc)
     return rc;
   if (!nr)
     return -EINVAL;
 
-  rc = walk_parent(cfg, seg, nr, &parent);
-  if (rc)
-    return rc;
-  if (parent->type != CFG_OBJ)
-    return -ENOTDIR;
+  cur = &cfg->root;
+  for (i = 0; i + 1 < nr; i++) {
+    if (tok[i].type == CFG_TOK_APPEND)
+      return -EINVAL;
+    if (tok[i].type == CFG_TOK_INDEX) {
+      int idx;
 
-  if (seg[nr - 1].idx_kind == CFG_IDX_NONE)
-    return set_str_plain(parent, seg[nr - 1].name, val);
+      if (cur->type != CFG_ARR)
+        return -ENOTDIR;
+      rc = arr_idx(cur, tok[i].idx, &idx);
+      if (rc)
+        return rc;
+      cur = arr_nth(cur, idx);
+      if (!cur)
+        return -ENOENT;
+      continue;
+    }
 
-  return set_str_arr(parent, seg[nr - 1].name, seg[nr - 1].idx_kind, seg[nr - 1].idx, val);
+    if (cur->type != CFG_OBJ)
+      return -ENOTDIR;
+
+    want = tok[i + 1].type == CFG_TOK_KEY ? CFG_OBJ : CFG_ARR;
+    child = obj_find(cur, tok[i].key);
+    if (!child) {
+      child = node_new(want, tok[i].key);
+      if (!child)
+        return -ENOMEM;
+      child_add(cur, child);
+    } else if (child->type != want) {
+      return -ENOTDIR;
+    }
+
+    cur = child;
+  }
+
+  if (tok[nr - 1].type == CFG_TOK_KEY) {
+    if (cur->type != CFG_OBJ)
+      return -ENOTDIR;
+    return set_str_plain(cur, tok[nr - 1].key, val);
+  }
+  if (tok[nr - 1].type == CFG_TOK_APPEND)
+    return set_arr_append(cur, val);
+
+  return set_arr_idx(cur, tok[nr - 1].idx, val);
 }
 
 int cfg_del(struct cfg *cfg, const char *path) {
-  struct cfg_seg seg[CFG_PATH_DEPTH_MAX];
-  struct cfg_node *parent;
+  struct cfg_tok tok[CFG_PATH_DEPTH_MAX];
+  struct cfg_node *cur;
+  struct cfg_node *child;
   int nr;
+  int i;
   int rc;
 
-  rc = parse_path(path, seg, CFG_PATH_DEPTH_MAX, &nr);
+  rc = parse_path(path, tok, CFG_PATH_DEPTH_MAX, &nr);
   if (rc)
     return rc;
   if (!nr)
     return -EINVAL;
 
-  rc = walk_parent(cfg, seg, nr, &parent);
-  if (rc)
-    return rc;
+  cur = &cfg->root;
+  for (i = 0; i + 1 < nr; i++) {
+    if (tok[i].type == CFG_TOK_APPEND)
+      return -EINVAL;
+    if (tok[i].type == CFG_TOK_INDEX) {
+      int idx;
 
-  if (seg[nr - 1].idx_kind == CFG_IDX_APPEND)
+      if (cur->type != CFG_ARR)
+        return -ENOTDIR;
+      rc = arr_idx(cur, tok[i].idx, &idx);
+      if (rc)
+        return rc;
+      cur = arr_nth(cur, idx);
+      if (!cur)
+        return -ENOENT;
+      continue;
+    }
+
+    if (cur->type != CFG_OBJ)
+      return -ENOTDIR;
+    child = obj_find(cur, tok[i].key);
+    if (!child)
+      return -ENOENT;
+    cur = child;
+  }
+
+  if (tok[nr - 1].type == CFG_TOK_APPEND)
     return -EINVAL;
-  if (seg[nr - 1].idx_kind == CFG_IDX_ONE)
-    return del_arr(parent, seg[nr - 1].name, seg[nr - 1].idx);
+  if (tok[nr - 1].type == CFG_TOK_INDEX)
+    return del_arr(cur, tok[nr - 1].idx);
+  if (cur->type != CFG_OBJ)
+    return -ENOTDIR;
 
-  return del_plain(parent, seg[nr - 1].name);
+  return del_plain(cur, tok[nr - 1].key);
 }
 
 enum cfg_type cfg_type(const struct cfg_node *node) {

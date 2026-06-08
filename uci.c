@@ -426,24 +426,25 @@ static int add_state(struct desired_set *set, struct desired_state **ds) {
   return 0;
 }
 
-static int yml_indent(FILE *f, int n) {
-  while (n-- > 0) {
-    if (fputc(' ', f) == EOF)
-      return -EIO;
-  }
-
-  return 0;
-}
-
-static int yml_quote(FILE *f, const char *s) {
+static int cfg_quote(FILE *f, const char *s) {
   const unsigned char *p;
 
-  if (fputc('\'', f) == EOF)
+  if (fputc('"', f) == EOF)
     return -EIO;
 
   for (p = (const unsigned char *)s; *p; p++) {
-    if (*p == '\'') {
-      if (fputc('\'', f) == EOF || fputc('\'', f) == EOF)
+    if (*p == '\\' || *p == '"') {
+      if (fputc('\\', f) == EOF || fputc(*p, f) == EOF)
+        return -EIO;
+      continue;
+    }
+    if (*p == '\n') {
+      if (fputs("\\n", f) == EOF)
+        return -EIO;
+      continue;
+    }
+    if (*p == '\t') {
+      if (fputs("\\t", f) == EOF)
         return -EIO;
       continue;
     }
@@ -451,21 +452,18 @@ static int yml_quote(FILE *f, const char *s) {
       return -EIO;
   }
 
-  if (fputc('\'', f) == EOF)
+  if (fputc('"', f) == EOF)
     return -EIO;
 
   return 0;
 }
 
-static int yml_key_str(FILE *f, int indent, const char *key, const char *val) {
+static int cfg_line_str(FILE *f, const char *path, const char *val) {
   int rc;
 
-  rc = yml_indent(f, indent);
-  if (rc)
-    return rc;
-  if (fprintf(f, "%s: ", key) < 0)
+  if (fprintf(f, "%s = ", path) < 0)
     return -EIO;
-  rc = yml_quote(f, val);
+  rc = cfg_quote(f, val);
   if (rc)
     return rc;
   if (fputc('\n', f) == EOF)
@@ -474,239 +472,294 @@ static int yml_key_str(FILE *f, int indent, const char *key, const char *val) {
   return 0;
 }
 
-static int yml_key_u32(FILE *f, int indent, const char *key, uint32_t val) {
-  int rc;
-
-  rc = yml_indent(f, indent);
-  if (rc)
-    return rc;
-  if (fprintf(f, "%s: %u\n", key, val) < 0)
+static int cfg_line_u32(FILE *f, const char *path, uint32_t val) {
+  if (fprintf(f, "%s = \"%u\"\n", path, val) < 0)
     return -EIO;
 
   return 0;
 }
 
-static int yml_str_seq(FILE *f, int indent, const char *key, const char seq[][IFNAMSIZ], int n) {
-  int i;
-  int rc;
-
-  if (!n)
-    return 0;
-
-  rc = yml_indent(f, indent);
-  if (rc)
-    return rc;
-  if (fprintf(f, "%s:\n", key) < 0)
-    return -EIO;
-
-  for (i = 0; i < n; i++) {
-    rc = yml_indent(f, indent + 2);
-    if (rc)
-      return rc;
-    if (fprintf(f, "- ") < 0)
-      return -EIO;
-    rc = yml_quote(f, seq[i]);
-    if (rc)
-      return rc;
-    if (fputc('\n', f) == EOF)
-      return -EIO;
-  }
+static int cfg_path(char *dst, size_t sz, const char *id, const char *tail) {
+  if (snprintf(dst, sz, "state.%s.%s", id, tail) >= (int)sz)
+    return -E2BIG;
 
   return 0;
 }
 
-static int yml_dns_seq(FILE *f, int indent, const char *key, const char seq[][INET_ADDRSTRLEN], int n) {
-  int i;
-  int rc;
+static int cfg_state_id(const struct desired_state *ds, char *dst, size_t sz, int idx) {
+  const char *src;
+  size_t n;
 
-  if (!n)
-    return 0;
+  src = ds->br_name[0] ? ds->br_name : ds->scenario;
+  n = 0;
 
-  rc = yml_indent(f, indent);
-  if (rc)
-    return rc;
-  if (fprintf(f, "%s:\n", key) < 0)
-    return -EIO;
+  if (src && src[0]) {
+    for (; *src && n + 1 < sz; src++) {
+      if (n == 0) {
+        if ((*src >= 'A' && *src <= 'Z') ||
+            (*src >= 'a' && *src <= 'z') || *src == '_') {
+          dst[n++] = *src;
+        } else if ((*src >= '0' && *src <= '9')) {
+          dst[n++] = '_';
+          if (n + 1 >= sz)
+            return -E2BIG;
+          dst[n++] = *src;
+        } else {
+          dst[n++] = '_';
+        }
+        continue;
+      }
 
-  for (i = 0; i < n; i++) {
-    rc = yml_indent(f, indent + 2);
-    if (rc)
-      return rc;
-    if (fprintf(f, "- ") < 0)
-      return -EIO;
-    rc = yml_quote(f, seq[i]);
-    if (rc)
-      return rc;
-    if (fputc('\n', f) == EOF)
-      return -EIO;
-  }
-
-  return 0;
-}
-
-static int yml_routes(FILE *f, const struct desired_state *ds) {
-  const struct desired_route4 *rt;
-  int i;
-  int rc;
-
-  if (!ds->n_routes)
-    return 0;
-
-  if (fprintf(f, "  routes:\n") < 0)
-    return -EIO;
-
-  for (i = 0; i < ds->n_routes; i++) {
-    rt = &ds->routes[i];
-    if (fprintf(f, "    - dst: ") < 0)
-      return -EIO;
-    rc = yml_quote(f, rt->dst);
-    if (rc)
-      return rc;
-    if (fputc('\n', f) == EOF)
-      return -EIO;
-    rc = yml_key_str(f, 6, "dev", rt->dev);
-    if (rc)
-      return rc;
-    if (rt->has_via) {
-      rc = yml_key_str(f, 6, "via", rt->via);
-      if (rc)
-        return rc;
+      if ((*src >= 'A' && *src <= 'Z') || (*src >= 'a' && *src <= 'z') ||
+          (*src >= '0' && *src <= '9') || *src == '_') {
+        dst[n++] = *src;
+      } else {
+        dst[n++] = '_';
+      }
     }
+    if (*src)
+      return -E2BIG;
+  }
+
+  if (!n) {
+    if (snprintf(dst, sz, "s%d", idx) >= (int)sz)
+      return -E2BIG;
+  } else {
+    dst[n] = '\0';
   }
 
   return 0;
 }
 
-static int yml_state(FILE *f, const struct desired_state *ds) {
+static int cfg_state(FILE *f, const struct desired_state *ds, int idx) {
+  char id[IFNAMSIZ];
+  char path[256];
+  int i;
   int rc;
 
-  if (fprintf(f, "- scenario: ") < 0)
-    return -EIO;
-  rc = yml_quote(f, ds->scenario);
+  rc = cfg_state_id(ds, id, sizeof(id), idx);
   if (rc)
     return rc;
-  if (fputc('\n', f) == EOF)
-    return -EIO;
+
+  rc = cfg_path(path, sizeof(path), id, "scenario");
+  if (rc)
+    return rc;
+  rc = cfg_line_str(f, path, ds->scenario);
+  if (rc)
+    return rc;
 
   if (ds->br_name[0]) {
-    if (fprintf(f, "  bridge:\n") < 0)
-      return -EIO;
-    rc = yml_key_str(f, 4, "name", ds->br_name);
+    rc = cfg_path(path, sizeof(path), id, "bridge.name");
     if (rc)
       return rc;
+    rc = cfg_line_str(f, path, ds->br_name);
+    if (rc)
+      return rc;
+
     if (ds->br_addr_mode == ADDR_STATIC) {
-      rc = yml_key_str(f, 4, "addr_mode", "static");
+      rc = cfg_path(path, sizeof(path), id, "bridge.addr_mode");
       if (rc)
         return rc;
-      rc = yml_key_str(f, 4, "addr", ds->br_addr);
+      rc = cfg_line_str(f, path, "static");
+      if (rc)
+        return rc;
+      rc = cfg_path(path, sizeof(path), id, "bridge.addr");
+      if (rc)
+        return rc;
+      rc = cfg_line_str(f, path, ds->br_addr);
       if (rc)
         return rc;
       if (ds->br_gateway[0]) {
-        rc = yml_key_str(f, 4, "gateway", ds->br_gateway);
+        rc = cfg_path(path, sizeof(path), id, "bridge.gateway");
+        if (rc)
+          return rc;
+        rc = cfg_line_str(f, path, ds->br_gateway);
         if (rc)
           return rc;
       }
-      rc = yml_dns_seq(f, 4, "dns", ds->br_dns, ds->n_br_dns);
-      if (rc)
-        return rc;
+      for (i = 0; i < ds->n_br_dns; i++) {
+        rc = cfg_path(path, sizeof(path), id, "bridge.dns[]");
+        if (rc)
+          return rc;
+        rc = cfg_line_str(f, path, ds->br_dns[i]);
+        if (rc)
+          return rc;
+      }
     } else if (ds->br_addr_mode == ADDR_DHCP) {
-      rc = yml_key_str(f, 4, "addr_mode", "dhcp");
+      rc = cfg_path(path, sizeof(path), id, "bridge.addr_mode");
       if (rc)
         return rc;
-      rc = yml_key_str(f, 4, "dhcp_cmd", ds->br_dhcp_cmd);
+      rc = cfg_line_str(f, path, "dhcp");
+      if (rc)
+        return rc;
+      rc = cfg_path(path, sizeof(path), id, "bridge.dhcp_cmd");
+      if (rc)
+        return rc;
+      rc = cfg_line_str(f, path, ds->br_dhcp_cmd);
       if (rc)
         return rc;
     } else {
-      rc = yml_key_str(f, 4, "addr_mode", "none");
+      rc = cfg_path(path, sizeof(path), id, "bridge.addr_mode");
+      if (rc)
+        return rc;
+      rc = cfg_line_str(f, path, "none");
       if (rc)
         return rc;
     }
-    rc = yml_str_seq(f, 4, "ports", ds->br_ports, ds->n_br_ports);
-    if (rc)
-      return rc;
+
+    for (i = 0; i < ds->n_br_ports; i++) {
+      rc = cfg_path(path, sizeof(path), id, "bridge.ports[]");
+      if (rc)
+        return rc;
+      rc = cfg_line_str(f, path, ds->br_ports[i]);
+      if (rc)
+        return rc;
+    }
   }
 
   if (ds->up_ifname[0]) {
-    if (fprintf(f, "  uplink:\n") < 0)
-      return -EIO;
-    rc = yml_key_str(f, 4, "ifname", ds->up_ifname);
+    rc = cfg_path(path, sizeof(path), id, "uplink.ifname");
+    if (rc)
+      return rc;
+    rc = cfg_line_str(f, path, ds->up_ifname);
     if (rc)
       return rc;
   }
 
   if (ds->vlan_ifname[0]) {
-    if (fprintf(f, "  vlan:\n") < 0)
-      return -EIO;
-    rc = yml_key_str(f, 4, "ifname", ds->vlan_ifname);
+    rc = cfg_path(path, sizeof(path), id, "vlan.ifname");
     if (rc)
       return rc;
-    rc = yml_key_u32(f, 4, "id", ds->vlan_id);
+    rc = cfg_line_str(f, path, ds->vlan_ifname);
+    if (rc)
+      return rc;
+    rc = cfg_path(path, sizeof(path), id, "vlan.id");
+    if (rc)
+      return rc;
+    rc = cfg_line_u32(f, path, ds->vlan_id);
     if (rc)
       return rc;
     if (ds->vlan_link[0]) {
-      rc = yml_key_str(f, 4, "link", ds->vlan_link);
+      rc = cfg_path(path, sizeof(path), id, "vlan.link");
+      if (rc)
+        return rc;
+      rc = cfg_line_str(f, path, ds->vlan_link);
       if (rc)
         return rc;
     }
     if (ds->vlan_bridge[0]) {
-      rc = yml_key_str(f, 4, "bridge", ds->vlan_bridge);
+      rc = cfg_path(path, sizeof(path), id, "vlan.bridge");
+      if (rc)
+        return rc;
+      rc = cfg_line_str(f, path, ds->vlan_bridge);
       if (rc)
         return rc;
     }
   }
 
   if (ds->wg_ifname[0]) {
-    if (fprintf(f, "  wg:\n") < 0)
-      return -EIO;
-    rc = yml_key_str(f, 4, "ifname", ds->wg_ifname);
+    rc = cfg_path(path, sizeof(path), id, "wg.ifname");
     if (rc)
       return rc;
-    rc = yml_key_str(f, 4, "peer_ip", ds->wg_peer_ip);
+    rc = cfg_line_str(f, path, ds->wg_ifname);
     if (rc)
       return rc;
-    rc = yml_key_str(f, 4, "route_dev", ds->wg_route_dev);
+    rc = cfg_path(path, sizeof(path), id, "wg.peer_ip");
+    if (rc)
+      return rc;
+    rc = cfg_line_str(f, path, ds->wg_peer_ip);
+    if (rc)
+      return rc;
+    rc = cfg_path(path, sizeof(path), id, "wg.route_dev");
+    if (rc)
+      return rc;
+    rc = cfg_line_str(f, path, ds->wg_route_dev);
     if (rc)
       return rc;
   }
 
   if (ds->vx_ifname[0]) {
-    if (fprintf(f, "  vxlan:\n") < 0)
-      return -EIO;
-    rc = yml_key_str(f, 4, "ifname", ds->vx_ifname);
+    rc = cfg_path(path, sizeof(path), id, "vxlan.ifname");
     if (rc)
       return rc;
-    rc = yml_key_u32(f, 4, "vni", ds->vx_vni);
+    rc = cfg_line_str(f, path, ds->vx_ifname);
     if (rc)
       return rc;
-    rc = yml_key_str(f, 4, "remote", ds->vx_remote);
+    rc = cfg_path(path, sizeof(path), id, "vxlan.vni");
+    if (rc)
+      return rc;
+    rc = cfg_line_u32(f, path, ds->vx_vni);
+    if (rc)
+      return rc;
+    rc = cfg_path(path, sizeof(path), id, "vxlan.remote");
+    if (rc)
+      return rc;
+    rc = cfg_line_str(f, path, ds->vx_remote);
     if (rc)
       return rc;
     if (ds->vx_dev[0]) {
-      rc = yml_key_str(f, 4, "dev", ds->vx_dev);
+      rc = cfg_path(path, sizeof(path), id, "vxlan.dev");
+      if (rc)
+        return rc;
+      rc = cfg_line_str(f, path, ds->vx_dev);
       if (rc)
         return rc;
     }
-    rc = yml_key_str(f, 4, "bridge", ds->vx_bridge);
+    rc = cfg_path(path, sizeof(path), id, "vxlan.bridge");
+    if (rc)
+      return rc;
+    rc = cfg_line_str(f, path, ds->vx_bridge);
     if (rc)
       return rc;
   }
 
-  return yml_routes(f, ds);
+  for (i = 0; i < ds->n_routes; i++) {
+    char route_path[64];
+
+    if (snprintf(route_path, sizeof(route_path), "routes.r%d.dst", i) >= (int)sizeof(route_path))
+      return -E2BIG;
+    rc = cfg_path(path, sizeof(path), id, route_path);
+    if (rc)
+      return rc;
+    rc = cfg_line_str(f, path, ds->routes[i].dst);
+    if (rc)
+      return rc;
+
+    if (snprintf(route_path, sizeof(route_path), "routes.r%d.dev", i) >= (int)sizeof(route_path))
+      return -E2BIG;
+    rc = cfg_path(path, sizeof(path), id, route_path);
+    if (rc)
+      return rc;
+    rc = cfg_line_str(f, path, ds->routes[i].dev);
+    if (rc)
+      return rc;
+
+    if (ds->routes[i].has_via) {
+      if (snprintf(route_path, sizeof(route_path), "routes.r%d.via", i) >= (int)sizeof(route_path))
+        return -E2BIG;
+      rc = cfg_path(path, sizeof(path), id, route_path);
+      if (rc)
+        return rc;
+      rc = cfg_line_str(f, path, ds->routes[i].via);
+      if (rc)
+        return rc;
+    }
+  }
+
+  return ferror(f) ? -EIO : 0;
 }
 
-static int yml_set(FILE *f, const struct desired_set *set) {
+static int cfg_set(FILE *f, const struct desired_set *set) {
   int i;
   int rc;
 
   for (i = 0; i < set->n_state; i++) {
-    rc = yml_state(f, &set->state[i]);
+    rc = cfg_state(f, &set->state[i], i);
     if (rc)
       return rc;
-    if (i + 1 != set->n_state && fputc('\n', f) == EOF)
-      return -EIO;
   }
 
-  return ferror(f) ? -EIO : 0;
+  return 0;
 }
 
 static int fill_bridge_proto(const struct uci_db *db, const char *if_sect, struct desired_state *ds) {
@@ -1059,7 +1112,7 @@ static int uci2yml_file(const char *network_path, const char *wireless_path, FIL
   if (rc)
     return rc;
 
-  return yml_set(f, &set);
+  return cfg_set(f, &set);
 }
 
 int uci2yml(const char *network_path, const char *wireless_path, const char *yaml_path) {

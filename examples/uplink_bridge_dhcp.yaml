@@ -1,11 +1,6 @@
-scenario: uplink_bridge
-
-bridge:
-  name: br-lan
-  addr_mode: dhcp
-  dhcp_cmd: udhcpc -i $iface -q -n
-  ports:
-    - eth1
-
-uplink:
-  ifname: eth0
+scenario = "uplink_bridge"
+bridge.name = "br-lan"
+bridge.addr_mode = "dhcp"
+bridge.dhcp_cmd = "udhcpc -i $iface -q -n"
+bridge.ports[] = "eth1"
+uplink.ifname = "eth0"

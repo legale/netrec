@@ -1,17 +1,10 @@
-scenario: uplink_bridge
-
-bridge:
-  name: br-lan
-  addr: 10.10.10.1/24
-  ports:
-    - eth1
-
-uplink:
-  ifname: eth0
-
-routes:
-  - dst: 0.0.0.0/0
-    via: 10.10.10.254
-    dev: br-lan
-  - dst: 1.2.3.4/32
-    dev: br-lan
+scenario = "uplink_bridge"
+bridge.name = "br-lan"
+bridge.addr = "10.10.10.1/24"
+bridge.ports[] = "eth1"
+uplink.ifname = "eth0"
+routes.default.dst = "0.0.0.0/0"
+routes.default.via = "10.10.10.254"
+routes.default.dev = "br-lan"
+routes.peer.dst = "1.2.3.4/32"
+routes.peer.dev = "br-lan"

@@ -1,11 +1,6 @@
-scenario: uplink_bridge
-
-bridge:
-  name: br-lan
-  addr: 10.10.10.1/24
-  ports:
-    - eth1
-    - eth2
-
-uplink:
-  ifname: eth0
+scenario = "uplink_bridge"
+bridge.name = "br-lan"
+bridge.addr = "10.10.10.1/24"
+bridge.ports[] = "eth1"
+bridge.ports[] = "eth2"
+uplink.ifname = "eth0"
