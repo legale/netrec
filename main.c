@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
   int i;
   int rc;
 
-  setup_syslog2("netrec", LOG_INFO, true);
+  setup_syslog2("netrec", LOG_NOTICE, true);
 
   for (i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-a") || !strcmp(argv[i], "--apply")) {

@@ -33,10 +33,10 @@ check: $(APP) $(CFG_TEST)
 deps: $(APP_LIBS)
 
 $(MODULES):
-	$(MAKE) -C $@ CC="$(CC)"
+	$(MAKE) -C $@
 
 $(APP_LIBS):
-	$(MAKE) -B -C $(dir $@) CC="$(CC)" $(notdir $@)
+	$(MAKE) -B -C $(dir $@) $(notdir $@)
 
 $(CFG_TEST): $(CFG_TEST_OBJS) $(CFG_TEST_LIBS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(CFG_TEST_OBJS) $(CFG_TEST_LIBS) $(LDLIBS)
