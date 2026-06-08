@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "cfg.h"
+#include "log.h"
 
 #define CFG_PATH_SEG_MAX 128
 #define CFG_PATH_DEPTH_MAX 64
@@ -659,7 +660,7 @@ int cfg_load(struct cfg *cfg, const char *path) {
 
   f = fopen(path, "rb");
   if (!f) {
-    perror(path);
+    nr_perror(path);
     cfg_free(cfg);
     return -errno;
   }
@@ -668,7 +669,7 @@ int cfg_load(struct cfg *cfg, const char *path) {
   while (fgets(line, sizeof(line), f)) {
     lineno++;
     if (!strchr(line, '\n') && !feof(f)) {
-      fprintf(stderr, "cfg: line too long in %s:%d\n", path, lineno);
+      nr_err("cfg: line too long in %s:%d", path, lineno);
       fclose(f);
       cfg_free(cfg);
       return -E2BIG;
@@ -676,7 +677,7 @@ int cfg_load(struct cfg *cfg, const char *path) {
     trim_eol(line);
     rc = load_line(cfg, line);
     if (rc) {
-      fprintf(stderr, "cfg: parse failed in %s:%d\n", path, lineno);
+      nr_err("cfg: parse failed in %s:%d", path, lineno);
       fclose(f);
       cfg_free(cfg);
       return rc;
@@ -693,7 +694,7 @@ int cfg_dump(const struct cfg *cfg, const char *path) {
 
   f = fopen(path, "wb");
   if (!f) {
-    perror(path);
+    nr_perror(path);
     return -errno;
   }
 

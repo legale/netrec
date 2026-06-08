@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "log.h"
 #include "uci.h"
 #include "yaml.h"
 
@@ -112,7 +113,7 @@ static int db_add(struct uci_db *db, const char *pkg, const char *sect, const ch
   struct uci_item *it;
 
   if (db->n_item >= NR_UCI_ITEM_MAX) {
-    fprintf(stderr, "uci: too many items, max=%d\n", NR_UCI_ITEM_MAX);
+    nr_err("uci: too many items, max=%d", NR_UCI_ITEM_MAX);
     return -E2BIG;
   }
 
@@ -132,7 +133,7 @@ static int db_load_file(struct uci_db *db, const char *path) {
 
   f = fopen(path, "rb");
   if (!f) {
-    perror(path);
+    nr_perror(path);
     return -errno;
   }
 
@@ -148,7 +149,7 @@ static int db_load_file(struct uci_db *db, const char *path) {
     int rc;
 
     if (!strchr(line, '\n') && !feof(f)) {
-      fprintf(stderr, "uci: line too long in %s\n", path);
+      nr_err("uci: line too long in %s", path);
       fclose(f);
       return -E2BIG;
     }
@@ -160,7 +161,7 @@ static int db_load_file(struct uci_db *db, const char *path) {
     eq = strchr(line, '=');
     dot1 = strchr(line, '.');
     if (!eq || !dot1 || dot1 > eq) {
-      fprintf(stderr, "uci: bad line in %s: %s\n", path, line);
+      nr_err("uci: bad line in %s: %s", path, line);
       fclose(f);
       return -EINVAL;
     }
@@ -171,7 +172,7 @@ static int db_load_file(struct uci_db *db, const char *path) {
 
     len = dot1 - line;
     if (len + 1 > sizeof(pkg)) {
-      fprintf(stderr, "uci: package too long in %s: %s\n", path, line);
+      nr_err("uci: package too long in %s: %s", path, line);
       fclose(f);
       return -E2BIG;
     }
@@ -182,7 +183,7 @@ static int db_load_file(struct uci_db *db, const char *path) {
     if (dot2) {
       len = dot2 - (dot1 + 1);
       if (len + 1 > sizeof(sect)) {
-        fprintf(stderr, "uci: section too long in %s: %s\n", path, line);
+        nr_err("uci: section too long in %s: %s", path, line);
         fclose(f);
         return -E2BIG;
       }
@@ -191,7 +192,7 @@ static int db_load_file(struct uci_db *db, const char *path) {
 
       len = eq - (dot2 + 1);
       if (len + 1 > sizeof(opt)) {
-        fprintf(stderr, "uci: option too long in %s: %s\n", path, line);
+        nr_err("uci: option too long in %s: %s", path, line);
         fclose(f);
         return -E2BIG;
       }
@@ -200,7 +201,7 @@ static int db_load_file(struct uci_db *db, const char *path) {
     } else {
       len = eq - (dot1 + 1);
       if (len + 1 > sizeof(sect)) {
-        fprintf(stderr, "uci: section too long in %s: %s\n", path, line);
+        nr_err("uci: section too long in %s: %s", path, line);
         fclose(f);
         return -E2BIG;
       }
@@ -286,8 +287,7 @@ static int add_bridge_port(struct desired_state *ds, const char *ifname) {
   }
 
   if (ds->n_br_ports >= NR_BR_PORT_MAX) {
-    fprintf(stderr, "uci: too many bridge ports for %s, max=%d\n",
-            ds->br_name, NR_BR_PORT_MAX);
+    nr_err("uci: too many bridge ports for %s, max=%d", ds->br_name, NR_BR_PORT_MAX);
     return -E2BIG;
   }
 
@@ -383,11 +383,11 @@ static int split_ip_list(const char *src, char dst[][INET_ADDRSTRLEN], int *nr, 
     if (rc == 0)
       break;
     if (rc < 0) {
-      fprintf(stderr, "uci: bad %s item length\n", tag);
+      nr_err("uci: bad %s item length", tag);
       return rc;
     }
     if (n >= max) {
-      fprintf(stderr, "uci: too many %s items, max=%d\n", tag, max);
+      nr_err("uci: too many %s items, max=%d", tag, max);
       return -E2BIG;
     }
     cpy(dst[n], INET_ADDRSTRLEN, word);
@@ -416,8 +416,7 @@ static int parse_u32_str(const char *s, uint32_t *v) {
 
 static int add_state(struct desired_set *set, struct desired_state **ds) {
   if (set->n_state >= NR_DES_STATE_MAX) {
-    fprintf(stderr, "uci: too many desired states, max=%d\n",
-            NR_DES_STATE_MAX);
+    nr_err("uci: too many desired states, max=%d", NR_DES_STATE_MAX);
     return -E2BIG;
   }
 
@@ -773,7 +772,7 @@ static int fill_bridge_proto(const struct uci_db *db, const char *if_sect, struc
 
   proto = db_get(db, "network", if_sect, "proto");
   if (!proto || !proto[0]) {
-    fprintf(stderr, "uci: missing proto for network.%s\n", if_sect);
+    nr_err("uci: missing proto for network.%s", if_sect);
     return -EINVAL;
   }
 
@@ -781,15 +780,13 @@ static int fill_bridge_proto(const struct uci_db *db, const char *if_sect, struc
     ipaddr = db_get(db, "network", if_sect, "ipaddr");
     mask = db_get(db, "network", if_sect, "netmask");
     if (!ipaddr || !mask) {
-      fprintf(stderr, "uci: static bridge %s needs ipaddr+netmask\n",
-              ds->br_name);
+      nr_err("uci: static bridge %s needs ipaddr+netmask", ds->br_name);
       return -EINVAL;
     }
 
     rc = mask_to_prefix(mask, &prefix);
     if (rc) {
-      fprintf(stderr, "uci: bad netmask %s for bridge %s\n", mask,
-              ds->br_name);
+      nr_err("uci: bad netmask %s for bridge %s", mask, ds->br_name);
       return rc;
     }
 
@@ -821,8 +818,7 @@ static int fill_bridge_proto(const struct uci_db *db, const char *if_sect, struc
     return 0;
   }
 
-  fprintf(stderr, "uci: unsupported proto=%s for bridge %s\n", proto,
-          ds->br_name);
+  nr_err("uci: unsupported proto=%s for bridge %s", proto, ds->br_name);
   return -EINVAL;
 }
 
@@ -842,7 +838,7 @@ static int add_device_ports(const char *ports, struct desired_state *ds, int ski
     if (rc == 0)
       return 0;
     if (rc < 0) {
-      fprintf(stderr, "uci: bridge port name too long for %s\n", ds->br_name);
+      nr_err("uci: bridge port name too long for %s", ds->br_name);
       return rc;
     }
     if (skip_first && first) {
@@ -925,8 +921,7 @@ static int find_wg_for_remote(const struct uci_db *db, const char *remote, char 
   if (found == 1)
     return 0;
 
-  fprintf(stderr, "uci: unable to resolve wireguard iface for remote %s\n",
-          remote);
+  nr_err("uci: unable to resolve wireguard iface for remote %s", remote);
   return -EINVAL;
 }
 
@@ -952,8 +947,7 @@ static int build_uplink_bridge(const struct uci_db *net,
   ports = db_get(net, "network", dev_sect, "ports");
   rc = first_device_port(ports, ds->up_ifname, sizeof(ds->up_ifname));
   if (rc) {
-    fprintf(stderr, "uci: bridge %s needs at least one uplink port\n",
-            br_name);
+    nr_err("uci: bridge %s needs at least one uplink port", br_name);
     return rc;
   }
 
@@ -990,26 +984,26 @@ static int build_wg_vxlan_bridge(const struct uci_db *net,
 
   rc = first_device_port(ports, ds->vx_ifname, sizeof(ds->vx_ifname));
   if (rc) {
-    fprintf(stderr, "uci: bridge %s needs vxlan port\n", br_name);
+    nr_err("uci: bridge %s needs vxlan port", br_name);
     return rc;
   }
 
   proto = db_get(net, "network", ds->vx_ifname, "proto");
   if (!proto || strcmp(proto, "vxlan")) {
-    fprintf(stderr, "uci: network.%s must be proto=vxlan\n", ds->vx_ifname);
+    nr_err("uci: network.%s must be proto=vxlan", ds->vx_ifname);
     return -EINVAL;
   }
 
   vid = db_get(net, "network", ds->vx_ifname, "vid");
   peeraddr = db_get(net, "network", ds->vx_ifname, "peeraddr");
   if (!vid || !peeraddr) {
-    fprintf(stderr, "uci: network.%s needs vid+peeraddr\n", ds->vx_ifname);
+    nr_err("uci: network.%s needs vid+peeraddr", ds->vx_ifname);
     return -EINVAL;
   }
 
   rc = parse_u32_str(vid, &ds->vx_vni);
   if (rc) {
-    fprintf(stderr, "uci: bad vid %s for %s\n", vid, ds->vx_ifname);
+    nr_err("uci: bad vid %s for %s", vid, ds->vx_ifname);
     return rc;
   }
 
@@ -1067,19 +1061,19 @@ static int uci_build_desired_set(const char *network_path, const char *wireless_
 
     br_name = db_get(&net, "network", net.item[i].sect, "name");
     if (!br_name || !br_name[0]) {
-      fprintf(stderr, "uci: bridge device %s missing name\n", net.item[i].sect);
+      nr_err("uci: bridge device %s missing name", net.item[i].sect);
       return -EINVAL;
     }
 
     if_sect = find_iface_by_device(&net, br_name);
     if (!if_sect) {
-      fprintf(stderr, "uci: no interface bound to bridge %s\n", br_name);
+      nr_err("uci: no interface bound to bridge %s", br_name);
       return -EINVAL;
     }
 
     proto = db_get(&net, "network", if_sect, "proto");
     if (!proto || !proto[0]) {
-      fprintf(stderr, "uci: bridge %s missing proto on network.%s\n", br_name, if_sect);
+      nr_err("uci: bridge %s missing proto on network.%s", br_name, if_sect);
       return -EINVAL;
     }
 
@@ -1088,7 +1082,7 @@ static int uci_build_desired_set(const char *network_path, const char *wireless_
     } else if (!strcmp(proto, "none")) {
       rc = build_wg_vxlan_bridge(&net, &wifi, net.item[i].sect, if_sect, br_name, set);
     } else {
-      fprintf(stderr, "uci: unsupported bridge proto=%s on %s\n", proto, br_name);
+      nr_err("uci: unsupported bridge proto=%s on %s", proto, br_name);
       return -EINVAL;
     }
 
@@ -1097,7 +1091,7 @@ static int uci_build_desired_set(const char *network_path, const char *wireless_
   }
 
   if (!set->n_state) {
-    fprintf(stderr, "uci: no desired states built\n");
+    nr_err("uci: no desired states built");
     return -EINVAL;
   }
 
@@ -1121,7 +1115,7 @@ int uci2yml(const char *network_path, const char *wireless_path, const char *yam
 
   f = fopen(yaml_path, "wb");
   if (!f) {
-    perror(yaml_path);
+    nr_perror(yaml_path);
     return -errno;
   }
 
@@ -1145,7 +1139,7 @@ int uci_load_desired_set(const char *network_path, const char *wireless_path, st
 
   fd = mkstemp(tmp);
   if (fd < 0) {
-    fprintf(stderr, "uci: mkstemp failed: %s\n", strerror(errno));
+    nr_err("uci: mkstemp failed: %s", strerror(errno));
     return -errno;
   }
 
@@ -1154,7 +1148,7 @@ int uci_load_desired_set(const char *network_path, const char *wireless_path, st
     rc = -errno;
     close(fd);
     unlink(tmp);
-    fprintf(stderr, "uci: fdopen failed: %s\n", strerror(-rc));
+    nr_err("uci: fdopen failed: %s", strerror(-rc));
     return rc;
   }
 

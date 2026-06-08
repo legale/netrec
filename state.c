@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 
+#include "log.h"
 #include "state.h"
 
 void rs_free(struct real_state *rs) {
@@ -38,8 +39,7 @@ int rs_load_resolv_conf(struct real_state *rs, const char *path) {
     }
     if (rs->n_dns4 >= NR_DNS4_MAX) {
       fclose(f);
-      fprintf(stderr, "resolv: too many IPv4 nameservers, max=%d\n",
-              NR_DNS4_MAX);
+      nr_err("resolv: too many IPv4 nameservers, max=%d", NR_DNS4_MAX);
       return -ENOSPC;
     }
     rs->dns4[rs->n_dns4++] = addr;

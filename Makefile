@@ -3,15 +3,23 @@ CFLAGS ?= -Wall -Wextra -Werror -Os -fno-common -ffunction-sections -fdata-secti
 
 CPPFLAGS += -D_GNU_SOURCE
 CPPFLAGS += -I.
+CPPFLAGS += -I..
 CPPFLAGS += -idirafter /usr/include
 CPPFLAGS += -idirafter /usr/include/$(shell $(CC) -dumpmachine 2>/dev/null)
 WARN := -Wall -Wextra
 
+MODULES = ../nlmon ../syslog2
+APP_LIBS = ../nlmon/libnlmon.a ../syslog2/libsyslog2.a
+CFG_TEST_LIBS = ../syslog2/libsyslog2.a
+
 APP := netrec
 APP_STATIC := $(APP)-static
-APP_OBJS := main.o yaml.o cfg.o uci.o state.o netlink.o verify.o
+APP_OBJS := main.o run.o watch.o yaml.o cfg.o uci.o state.o netlink.o verify.o
 CFG_TEST := cfg_path_check
 CFG_TEST_OBJS := tests/cfg_path_check.o cfg.o
+LDLIBS += -lc -lpthread
+
+.PHONY: all clean check static deps
 
 all: $(APP)
 
@@ -22,19 +30,26 @@ check: $(APP) $(CFG_TEST)
 	tests/smoke_check.sh
 	tests/netns_check.sh
 
-$(CFG_TEST): $(CFG_TEST_OBJS)
-	$(CC) $(CFLAGS) -o $@ $(CFG_TEST_OBJS)
+deps: $(APP_LIBS)
 
-$(APP): $(APP_OBJS)
-	$(CC) $(CFLAGS) -o $@ $(APP_OBJS)
+$(MODULES):
+	$(MAKE) -C $@ CC="$(CC)"
 
-$(APP_STATIC): $(APP_OBJS)
-	$(CC) $(CFLAGS) -static -o $@ $(APP_OBJS)
+$(APP_LIBS):
+	$(MAKE) -B -C $(dir $@) CC="$(CC)" $(notdir $@)
+
+$(CFG_TEST): $(CFG_TEST_OBJS) $(CFG_TEST_LIBS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(CFG_TEST_OBJS) $(CFG_TEST_LIBS) $(LDLIBS)
+
+$(APP): deps $(APP_OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(APP_OBJS) $(APP_LIBS) $(LDLIBS)
+
+$(APP_STATIC): deps $(APP_OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -static -o $@ $(APP_OBJS) $(APP_LIBS) $(LDLIBS)
 
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
 clean:
 	rm -f $(APP) $(APP_STATIC) $(APP_OBJS) $(CFG_TEST) $(CFG_TEST_OBJS)
-
-.PHONY: all clean check static
+	$(foreach mod,$(MODULES),$(MAKE) -C $(mod) clean;)

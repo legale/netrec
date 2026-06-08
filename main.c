@@ -1,105 +1,51 @@
-#include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/file.h>
-#include <unistd.h>
 
-#include "netlink.h"
-#include "state.h"
-#include "uci.h"
-#include "verify.h"
-#include "yaml.h"
+#include "log.h"
+#include "run.h"
+#include "watch.h"
 
 static void usage(const char *prog) {
   fprintf(stderr,
-          "usage: %s [-a|--apply] [-c config.yaml] "
-          "[--source yaml|uci] [--uci-network path --uci-wireless path]\n",
+          "usage: %s [-a|--apply] [-w|--watch|--daemon] [--debounce-ms ms] "
+          "[-c config.yaml] [--source yaml|uci] "
+          "[--uci-network path --uci-wireless path]\n",
           prog);
 }
 
-static int apply_lock(void) {
-  int fd;
-
-  fd = open("/tmp/netrec.lock", O_CREAT | O_RDWR | O_CLOEXEC, 0600);
-  if (fd < 0) {
-    fprintf(stderr, "apply: lock open failed: %s\n", strerror(errno));
-    return -errno;
-  }
-
-  if (flock(fd, LOCK_EX | LOCK_NB) < 0) {
-    fprintf(stderr, "apply: another netrec apply is running\n");
-    close(fd);
-    return -EAGAIN;
-  }
-
-  return fd;
-}
-
-static int load_real(struct real_state *rs) {
-  int rc;
-
-  rc = nl_load_state(rs);
-  if (rc) {
-    fprintf(stderr, "netlink: failed: %s\n", nl_errstr(rc));
-    rs_free(rs);
-    return rc;
-  }
-
-  rc = rs_load_resolv_conf(rs, "/etc/resolv.conf");
-  if (rc) {
-    rs_free(rs);
-    return rc;
-  }
-
-  return 0;
-}
-
-static int run_verify_set(const struct desired_set *set, int apply, int *act_fail) {
-  struct real_state rs;
-  int diff = 0;
-  int i;
-  int rc;
-
-  rc = load_real(&rs);
-  if (rc) {
-    return rc;
-  }
-
-  *act_fail = 0;
-  for (i = 0; i < set->n_state; i++) {
-    rc = verify_state(&set->state[i], &rs, apply, act_fail);
-    if (rc < 0) {
-      rs_free(&rs);
-      return rc;
-    }
-    diff += rc;
-  }
-  rs_free(&rs);
-  return diff;
-}
-
 int main(int argc, char **argv) {
-  struct desired_set set;
+  struct netrec_run_cfg run;
   const char *cfg = NULL;
+  const char *debounce_s = NULL;
   const char *source = "yaml";
   const char *uci_network = NULL;
   const char *uci_wireless = NULL;
-  int act_fail = 0;
-  int lock_fd = -1;
   int apply = 0;
-  int diff;
+  int debounce_ms = 0;
+  int watch = 0;
   int i;
   int rc;
+
+  setup_syslog2("netrec", LOG_INFO, true);
 
   for (i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "-a") || !strcmp(argv[i], "--apply")) {
       apply = 1;
       continue;
     }
+    if (!strcmp(argv[i], "-w") || !strcmp(argv[i], "--watch") ||
+        !strcmp(argv[i], "--daemon")) {
+      watch = 1;
+      continue;
+    }
 
     if (!strcmp(argv[i], "-c") && i + 1 < argc) {
       cfg = argv[++i];
+      continue;
+    }
+    if (!strcmp(argv[i], "--debounce-ms") && i + 1 < argc) {
+      debounce_s = argv[++i];
       continue;
     }
     if (!strcmp(argv[i], "--source") && i + 1 < argc) {
@@ -119,55 +65,39 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  if (!strcmp(source, "yaml")) {
-    if (!cfg) {
-      usage(argv[0]);
-      return 2;
-    }
-
-    rc = yaml_load_desired_set(cfg, &set);
-    if (rc) {
-      return 1;
-    }
-  } else if (!strcmp(source, "uci")) {
-    if (!uci_network || !uci_wireless) {
-      usage(argv[0]);
-      return 2;
-    }
-
-    rc = uci_load_desired_set(uci_network, uci_wireless, &set);
-    if (rc) {
-      return 1;
-    }
-  } else {
-    fprintf(stderr, "source: unsupported %s\n", source);
+  if (!strcmp(source, "yaml") && !cfg) {
+    usage(argv[0]);
     return 2;
   }
+  if (!strcmp(source, "uci") && (!uci_network || !uci_wireless)) {
+    usage(argv[0]);
+    return 2;
+  }
+  if (strcmp(source, "yaml") && strcmp(source, "uci")) {
+    usage(argv[0]);
+    return 2;
+  }
+  if (debounce_s) {
+    char *end;
 
-  if (apply) {
-    lock_fd = apply_lock();
-    if (lock_fd < 0) {
-      return 1;
+    rc = 0;
+    debounce_ms = (int)strtol(debounce_s, &end, 10);
+    if (!debounce_s[0] || *end || debounce_ms < 0) {
+      usage(argv[0]);
+      return 2;
     }
   }
 
-  diff = run_verify_set(&set, apply, &act_fail);
-  if (!apply) {
-    return diff ? 1 : 0;
-  }
-  if (diff < 0 || act_fail) {
-    return 1;
-  }
-  if (!diff) {
-    return 0;
-  }
+  memset(&run, 0, sizeof(run));
+  run.cfg_path = cfg;
+  run.source = source;
+  run.uci_network = uci_network;
+  run.uci_wireless = uci_wireless;
+  run.apply = apply;
 
-  printf("POST_VERIFY\n");
-  diff = run_verify_set(&set, 0, &act_fail);
-  if (diff || act_fail) {
-    return 1;
-  }
+  if (watch)
+    return netrec_watch(&run, debounce_ms);
 
-  (void)lock_fd;
-  return 0;
+  rc = netrec_run_once(&run);
+  return rc ? 1 : 0;
 }

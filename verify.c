@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <linux/if.h>
 
+#include "log.h"
 #include "verify.h"
 
 struct vctx {
@@ -798,7 +799,7 @@ int verify_state(const struct desired_state *ds, const struct real_state *rs,
   } else if (!strcmp(ds->scenario, "wg_vxlan_bridge")) {
     diff = verify_wg_vxlan_bridge(ds, rs, &ctx);
   } else {
-    fprintf(stderr, "verify: unsupported scenario=%s\n", ds->scenario);
+    nr_err("verify: unsupported scenario=%s", ds->scenario);
     return 1;
   }
 

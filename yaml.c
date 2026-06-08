@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "cfg.h"
+#include "log.h"
 #include "yaml.h"
 
 static void cpy(char *dst, size_t sz, const char *src) {
@@ -23,14 +24,14 @@ static int parse_u32_str(const char *s, uint32_t *dst) {
   unsigned long v;
 
   if (!s || !s[0]) {
-    fprintf(stderr, "cfg: missing integer value\n");
+    nr_err("cfg: missing integer value");
     return -EINVAL;
   }
 
   errno = 0;
   v = strtoul(s, &end, 0);
   if (errno || *end || v > UINT32_MAX) {
-    fprintf(stderr, "cfg: bad integer %s\n", s);
+    nr_err("cfg: bad integer %s", s);
     return -EINVAL;
   }
 
@@ -56,12 +57,12 @@ static int get_str(struct cfg_node *obj, const char *key, char *dst, size_t sz, 
       dst[0] = '\0';
       return 0;
     }
-    fprintf(stderr, "cfg: missing %s\n", key);
+    nr_err("cfg: missing %s", key);
     return -EINVAL;
   }
 
   if (cfg_type(node) != CFG_STR) {
-    fprintf(stderr, "cfg: %s must be string\n", key);
+    nr_err("cfg: %s must be string", key);
     return -EINVAL;
   }
 
@@ -74,7 +75,7 @@ static int get_u32(struct cfg_node *obj, const char *key, uint32_t *dst) {
 
   node = cfg_child(obj, key);
   if (!node || cfg_type(node) != CFG_STR) {
-    fprintf(stderr, "cfg: missing %s\n", key);
+    nr_err("cfg: missing %s", key);
     return -EINVAL;
   }
 
@@ -93,18 +94,18 @@ static int get_str_arr(struct cfg_node *obj, const char *key, char dst[][IFNAMSI
     return 0;
 
   if (cfg_type(arr) != CFG_ARR) {
-    fprintf(stderr, "cfg: %s must be array\n", key);
+    nr_err("cfg: %s must be array", key);
     return -EINVAL;
   }
 
   n = 0;
   for (it = cfg_first(arr); it; it = cfg_next(it)) {
     if (cfg_type(it) != CFG_STR) {
-      fprintf(stderr, "cfg: %s items must be string\n", key);
+      nr_err("cfg: %s items must be string", key);
       return -EINVAL;
     }
     if (n >= max) {
-      fprintf(stderr, "cfg: too many %s, max=%d\n", key, max);
+      nr_err("cfg: too many %s, max=%d", key, max);
       return -E2BIG;
     }
     cpy(dst[n], IFNAMSIZ, cfg_str(it));
@@ -127,18 +128,18 @@ static int get_dns_arr(struct cfg_node *obj, const char *key, char dst[][INET_AD
     return 0;
 
   if (cfg_type(arr) != CFG_ARR) {
-    fprintf(stderr, "cfg: %s must be array\n", key);
+    nr_err("cfg: %s must be array", key);
     return -EINVAL;
   }
 
   n = 0;
   for (it = cfg_first(arr); it; it = cfg_next(it)) {
     if (cfg_type(it) != CFG_STR) {
-      fprintf(stderr, "cfg: %s items must be string\n", key);
+      nr_err("cfg: %s items must be string", key);
       return -EINVAL;
     }
     if (n >= max) {
-      fprintf(stderr, "cfg: too many %s, max=%d\n", key, max);
+      nr_err("cfg: too many %s, max=%d", key, max);
       return -E2BIG;
     }
     cpy(dst[n], INET_ADDRSTRLEN, cfg_str(it));
@@ -163,18 +164,18 @@ static int load_routes(struct cfg_node *root, struct desired_state *ds) {
     return 0;
 
   if (cfg_type(routes) != CFG_OBJ) {
-    fprintf(stderr, "cfg: routes must be object\n");
+    nr_err("cfg: routes must be object");
     return -EINVAL;
   }
 
   n = 0;
   for (it = cfg_first(routes); it; it = cfg_next(it)) {
     if (cfg_type(it) != CFG_OBJ) {
-      fprintf(stderr, "cfg: routes.%s must be object\n", cfg_name(it));
+      nr_err("cfg: routes.%s must be object", cfg_name(it));
       return -EINVAL;
     }
     if (n >= NR_DES_ROUTE4_MAX) {
-      fprintf(stderr, "cfg: too many routes, max=%d\n", NR_DES_ROUTE4_MAX);
+      nr_err("cfg: too many routes, max=%d", NR_DES_ROUTE4_MAX);
       return -E2BIG;
     }
 
@@ -205,7 +206,7 @@ static int load_bridge(struct cfg_node *root, struct desired_state *ds) {
 
   br = cfg_child(root, "bridge");
   if (!br || cfg_type(br) != CFG_OBJ) {
-    fprintf(stderr, "cfg: bridge required\n");
+    nr_err("cfg: bridge required");
     return -EINVAL;
   }
 
@@ -233,36 +234,36 @@ static int load_bridge(struct cfg_node *root, struct desired_state *ds) {
   } else if (!strcmp(mode, "static")) {
     ds->br_addr_mode = ADDR_STATIC;
     if (!ds->br_addr[0]) {
-      fprintf(stderr, "cfg: bridge.addr required for static\n");
+      nr_err("cfg: bridge.addr required for static");
       return -EINVAL;
     }
   } else if (!strcmp(mode, "dhcp")) {
     ds->br_addr_mode = ADDR_DHCP;
     if (ds->br_addr[0]) {
-      fprintf(stderr, "cfg: bridge.addr not allowed for dhcp\n");
+      nr_err("cfg: bridge.addr not allowed for dhcp");
       return -EINVAL;
     }
     if (!ds->br_dhcp_cmd[0]) {
-      fprintf(stderr, "cfg: bridge.dhcp_cmd required for dhcp\n");
+      nr_err("cfg: bridge.dhcp_cmd required for dhcp");
       return -EINVAL;
     }
   } else if (!strcmp(mode, "none")) {
     ds->br_addr_mode = ADDR_NONE;
     if (ds->br_addr[0]) {
-      fprintf(stderr, "cfg: bridge.addr not allowed for none\n");
+      nr_err("cfg: bridge.addr not allowed for none");
       return -EINVAL;
     }
   } else {
-    fprintf(stderr, "cfg: bad bridge.addr_mode=%s\n", mode);
+    nr_err("cfg: bad bridge.addr_mode=%s", mode);
     return -EINVAL;
   }
 
   if (ds->br_gateway[0] && ds->br_addr_mode != ADDR_STATIC) {
-    fprintf(stderr, "cfg: bridge.gateway requires static addr_mode\n");
+    nr_err("cfg: bridge.gateway requires static addr_mode");
     return -EINVAL;
   }
   if (ds->n_br_dns && ds->br_addr_mode != ADDR_STATIC) {
-    fprintf(stderr, "cfg: bridge.dns requires static addr_mode\n");
+    nr_err("cfg: bridge.dns requires static addr_mode");
     return -EINVAL;
   }
 
@@ -274,7 +275,7 @@ static int load_uplink(struct cfg_node *root, struct desired_state *ds) {
 
   up = cfg_child(root, "uplink");
   if (!up || cfg_type(up) != CFG_OBJ) {
-    fprintf(stderr, "cfg: uplink required\n");
+    nr_err("cfg: uplink required");
     return -EINVAL;
   }
 
@@ -287,7 +288,7 @@ static int load_vlan(struct cfg_node *root, struct desired_state *ds) {
 
   vl = cfg_child(root, "vlan");
   if (!vl || cfg_type(vl) != CFG_OBJ) {
-    fprintf(stderr, "cfg: vlan required\n");
+    nr_err("cfg: vlan required");
     return -EINVAL;
   }
 
@@ -310,11 +311,11 @@ static int load_vlan(struct cfg_node *root, struct desired_state *ds) {
     cpy(ds->vlan_bridge, sizeof(ds->vlan_bridge), ds->br_name);
 
   if (strcmp(ds->vlan_link, ds->up_ifname)) {
-    fprintf(stderr, "cfg: vlan.link must equal uplink.ifname\n");
+    nr_err("cfg: vlan.link must equal uplink.ifname");
     return -EINVAL;
   }
   if (strcmp(ds->vlan_bridge, ds->br_name)) {
-    fprintf(stderr, "cfg: vlan.bridge must equal bridge.name\n");
+    nr_err("cfg: vlan.bridge must equal bridge.name");
     return -EINVAL;
   }
 
@@ -329,7 +330,7 @@ static int load_wg_vxlan(struct cfg_node *root, struct desired_state *ds) {
   wg = cfg_child(root, "wg");
   vx = cfg_child(root, "vxlan");
   if (!wg || !vx || cfg_type(wg) != CFG_OBJ || cfg_type(vx) != CFG_OBJ) {
-    fprintf(stderr, "cfg: wg/vxlan required\n");
+    nr_err("cfg: wg/vxlan required");
     return -EINVAL;
   }
 
@@ -360,11 +361,11 @@ static int load_wg_vxlan(struct cfg_node *root, struct desired_state *ds) {
     return rc;
 
   if (ds->vx_dev[0] && strcmp(ds->vx_dev, ds->wg_ifname)) {
-    fprintf(stderr, "cfg: vxlan.dev must equal wg.ifname\n");
+    nr_err("cfg: vxlan.dev must equal wg.ifname");
     return -EINVAL;
   }
   if (strcmp(ds->vx_bridge, ds->br_name)) {
-    fprintf(stderr, "cfg: vxlan.bridge must equal bridge.name\n");
+    nr_err("cfg: vxlan.bridge must equal bridge.name");
     return -EINVAL;
   }
 
@@ -401,7 +402,7 @@ static int load_state(struct cfg_node *root, struct desired_state *ds) {
     if (!rc)
       rc = load_wg_vxlan(root, ds);
   } else {
-    fprintf(stderr, "cfg: unsupported scenario=%s\n", ds->scenario);
+    nr_err("cfg: unsupported scenario=%s", ds->scenario);
     return -EINVAL;
   }
 
@@ -419,7 +420,7 @@ int yaml_load_desired(const char *path, struct desired_state *ds) {
   if (rc)
     return rc;
   if (set.n_state != 1) {
-    fprintf(stderr, "cfg: %s contains %d desired states, expected 1\n", path, set.n_state);
+    nr_err("cfg: %s contains %d desired states, expected 1", path, set.n_state);
     return -EINVAL;
   }
 
@@ -454,7 +455,7 @@ int yaml_load_desired_set(const char *path, struct desired_set *set) {
 
   states = cfg_child(root, "state");
   if (!states || cfg_type(states) != CFG_OBJ) {
-    fprintf(stderr, "cfg: root must contain scenario or state.<id>\n");
+    nr_err("cfg: root must contain scenario or state.<id>");
     cfg_free(&cfg);
     return -EINVAL;
   }
@@ -462,12 +463,12 @@ int yaml_load_desired_set(const char *path, struct desired_set *set) {
   n = 0;
   for (it = cfg_first(states); it; it = cfg_next(it)) {
     if (cfg_type(it) != CFG_OBJ) {
-      fprintf(stderr, "cfg: state.%s must be object\n", cfg_name(it));
+      nr_err("cfg: state.%s must be object", cfg_name(it));
       cfg_free(&cfg);
       return -EINVAL;
     }
     if (n >= NR_DES_STATE_MAX) {
-      fprintf(stderr, "cfg: too many desired states, max=%d\n", NR_DES_STATE_MAX);
+      nr_err("cfg: too many desired states, max=%d", NR_DES_STATE_MAX);
       cfg_free(&cfg);
       return -E2BIG;
     }
@@ -480,7 +481,7 @@ int yaml_load_desired_set(const char *path, struct desired_set *set) {
   }
 
   if (!n) {
-    fprintf(stderr, "cfg: state is empty\n");
+    nr_err("cfg: state is empty");
     cfg_free(&cfg);
     return -EINVAL;
   }
