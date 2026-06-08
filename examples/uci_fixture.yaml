@@ -1,0 +1,43 @@
+- scenario: uplink_bridge
+  bridge:
+    name: br-lan
+    addr_mode: dhcp
+    dhcp_cmd: 'udhcpc -i $iface -q -n'
+    ports:
+      - awlan1_24
+      - awlan0_24
+      - awlan1_74
+      - awlan0_74
+      - awlan0_56
+      - cwlan1_4
+      - cwlan0_4
+      - cwlan1_15
+      - cwlan0_15
+  uplink:
+    ifname: wan
+
+- scenario: uplink_bridge
+  bridge:
+    name: br-mgmt
+    addr_mode: static
+    addr: 100.100.1.1/24
+  uplink:
+    ifname: lan
+
+- scenario: wg_vxlan_bridge
+  bridge:
+    name: br3_6
+    addr_mode: none
+    ports:
+      - awlan1_58
+      - awlan1_42
+      - awlan0_42
+  wg:
+    ifname: wg1
+    peer_ip: 100.100.2.1
+    route_dev: wg1
+  vxlan:
+    ifname: wan_vx3
+    vni: 3
+    remote: 100.100.2.1
+    bridge: br3_6

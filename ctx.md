@@ -86,9 +86,9 @@ Return code:
         yaml_load_desired_set()
         yaml_load_desired()
         read YAML through libyaml
-        require root mapping
+        accept root mapping or top-level sequence of mappings
         read scenario first
-        current YAML path fills desired_set with one flat desired_state
+        YAML path can fill one desired_state or the whole desired_set
         validate only relations needed by selected scenario
         no generic config graph
         optional routes[] can be present for every scenario
@@ -132,9 +132,9 @@ Return code:
 
 Desired state ядра verifier теперь подается как fixed-size desired_set.
 
-Сейчас YAML через libyaml по-прежнему поддержан, но пока заполняет только
-один элемент desired_set. Это оставляет verifier независимым от будущего UCI
-adapter и не ломает текущий `make check`.
+Сейчас YAML через libyaml поддерживает и одиночный scenario, и top-level
+sequence scenario-элементов. Это позволяет проверять multi-state desired_set
+через тот же YAML loader, без второго формата для verifier.
 
 Структура фиксированная и плоская:
 

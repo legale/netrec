@@ -7,6 +7,9 @@ Default mode is dry-run. netrec reads desired state from YAML or from UCI dump
 files, reads real state from the kernel through rtnetlink, prints OK/MISS lines
 and ACT commands. Without --apply it does not change the system.
 
+YAML input can be either one scenario mapping or a top-level sequence of
+scenario mappings.
+
 Build:
 
 	make
@@ -23,6 +26,10 @@ Run UCI fixture dry-run:
 
 	./netrec --source uci --uci-network uci/uci.network \
 		--uci-wireless uci/uci.wireless
+
+Run equivalent multi-scenario YAML fixture:
+
+	./netrec -c examples/uci_fixture.yaml
 
 Run apply:
 
@@ -207,6 +214,7 @@ Limits:
 	bridge.ports supports 0..32 additional bridge member interfaces
 	routes supports 0..64 IPv4 routes
 	no daemon mode
+	YAML input supports one scenario or a top-level scenario sequence
 	UCI input adapter currently covers bridge/static, bridge/dhcp,
 	bridge+wg+vxlan and wireless bridge members
 	no JSON, firewall, netifd integration

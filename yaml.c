@@ -382,7 +382,7 @@ static int load_vlan(yaml_doc_t *doc, yaml_node_t *root, struct desired_state *d
   return 0;
 }
 
-static int load_wg_vxlan(yaml_doc_t *doc, yaml_node_t *root,     struct desired_state *ds) {
+static int load_wg_vxlan(yaml_doc_t *doc, yaml_node_t *root, struct desired_state *ds) {
   yaml_node_t *wg;
   yaml_node_t *vx;
   int rc;
@@ -424,7 +424,7 @@ static int load_wg_vxlan(yaml_doc_t *doc, yaml_node_t *root,     struct desired_
   if (rc) {
     return rc;
   }
-  rc = get_str(doc, vx, "dev", ds->vx_dev, sizeof(ds->vx_dev), 1);
+  rc = get_str(doc, vx, "dev", ds->vx_dev, sizeof(ds->vx_dev), 0);
   if (rc) {
     return rc;
   }
@@ -434,7 +434,7 @@ static int load_wg_vxlan(yaml_doc_t *doc, yaml_node_t *root,     struct desired_
     return rc;
   }
 
-  if (strcmp(ds->vx_dev, ds->wg_ifname)) {
+  if (ds->vx_dev[0] && strcmp(ds->vx_dev, ds->wg_ifname)) {
     fprintf(stderr, "yaml: vxlan.dev must equal wg.ifname\n");
     return -EINVAL;
   }
@@ -446,17 +446,10 @@ static int load_wg_vxlan(yaml_doc_t *doc, yaml_node_t *root,     struct desired_
   return 0;
 }
 
-static int load_doc(yaml_doc_t *doc, struct desired_state *ds) {
+static int load_doc(yaml_doc_t *doc, yaml_node_t *root, struct desired_state *ds) {
   /* Сначала scenario, потом только нужные секции этого scenario. */
-  yaml_node_t *root;
   yaml_node_t *up;
   int rc;
-
-  root = yaml_document_get_root_node(doc);
-  if (!root || root->type != YAML_MAPPING_NODE) {
-    fprintf(stderr, "yaml: root must be mapping\n");
-    return -EINVAL;
-  }
 
   rc = get_str(doc, root, "scenario", ds->scenario,
                sizeof(ds->scenario), 1);
@@ -504,6 +497,7 @@ static int yaml_load_desired_one(const char *path, struct desired_state *ds) {
   /* libyaml нужен только для чтения config.yaml в desired_state. */
   yaml_parser_t parser;
   yaml_doc_t doc;
+  yaml_node_t *root;
   FILE *f;
   int rc;
 
@@ -529,7 +523,13 @@ static int yaml_load_desired_one(const char *path, struct desired_state *ds) {
     return -EINVAL;
   }
 
-  rc = load_doc(&doc, ds);
+  root = yaml_document_get_root_node(&doc);
+  if (!root || root->type != YAML_MAPPING_NODE) {
+    fprintf(stderr, "yaml: root must be mapping\n");
+    rc = -EINVAL;
+  } else {
+    rc = load_doc(&doc, root, ds);
+  }
   yaml_document_delete(&doc);
   yaml_parser_delete(&parser);
   fclose(f);
@@ -542,16 +542,94 @@ int yaml_load_desired(const char *path, struct desired_state *ds) {
 }
 
 int yaml_load_desired_set(const char *path, struct desired_set *set) {
+  yaml_parser_t parser;
+  yaml_doc_t doc;
+  yaml_node_item_t *it;
+  yaml_node_t *node;
+  yaml_node_t *root;
+  FILE *f;
   int rc;
+  int n;
 
   memset(set, 0, sizeof(*set));
-  set->n_state = 1;
 
-  rc = yaml_load_desired_one(path, &set->state[0]);
-  if (rc) {
-    set->n_state = 0;
-    return rc;
+  f = fopen(path, "rb");
+  if (!f) {
+    perror(path);
+    return -errno;
   }
 
-  return 0;
+  if (!yaml_parser_initialize(&parser)) {
+    fclose(f);
+    return -ENOMEM;
+  }
+
+  yaml_parser_set_input_file(&parser, f);
+  if (!yaml_parser_load(&parser, &doc)) {
+    fprintf(stderr, "yaml: parse failed at line %lu\n",
+            (unsigned long)parser.problem_mark.line + 1);
+    yaml_parser_delete(&parser);
+    fclose(f);
+    return -EINVAL;
+  }
+
+  root = yaml_document_get_root_node(&doc);
+  if (!root) {
+    fprintf(stderr, "yaml: empty document\n");
+    rc = -EINVAL;
+    goto out;
+  }
+
+  if (root->type == YAML_MAPPING_NODE) {
+    set->n_state = 1;
+    rc = load_doc(&doc, root, &set->state[0]);
+    if (rc)
+      set->n_state = 0;
+    goto out;
+  }
+
+  if (root->type != YAML_SEQUENCE_NODE) {
+    fprintf(stderr, "yaml: root must be mapping or sequence\n");
+    rc = -EINVAL;
+    goto out;
+  }
+
+  n = 0;
+  for (it = root->data.sequence.items.start; it < root->data.sequence.items.top; it++) {
+    if (n >= NR_DES_STATE_MAX) {
+      fprintf(stderr, "yaml: too many desired states, max=%d\n", NR_DES_STATE_MAX);
+      rc = -E2BIG;
+      goto out;
+    }
+
+    node = yaml_document_get_node(&doc, *it);
+    if (!node || node->type != YAML_MAPPING_NODE) {
+      fprintf(stderr, "yaml: desired state item must be mapping\n");
+      rc = -EINVAL;
+      goto out;
+    }
+
+    memset(&set->state[n], 0, sizeof(set->state[n]));
+    rc = load_doc(&doc, node, &set->state[n]);
+    if (rc) {
+      set->n_state = 0;
+      goto out;
+    }
+    n++;
+  }
+
+  if (!n) {
+    fprintf(stderr, "yaml: root sequence is empty\n");
+    rc = -EINVAL;
+    goto out;
+  }
+
+  set->n_state = n;
+  rc = 0;
+
+out:
+  yaml_document_delete(&doc);
+  yaml_parser_delete(&parser);
+  fclose(f);
+  return rc;
 }
