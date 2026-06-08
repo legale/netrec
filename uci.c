@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "log.h"
@@ -127,6 +128,74 @@ static int db_add(struct uci_db *db, const char *pkg, const char *sect, const ch
   return 0;
 }
 
+static int db_load_line(struct uci_db *db, const char *path, char *line) {
+  char *eq;
+  char *dot1;
+  char *dot2;
+  char *val;
+  char pkg[UCI_PKG_SZ];
+  char sect[UCI_SECT_SZ];
+  char opt[UCI_OPT_SZ];
+  size_t len;
+
+  trim_eol(line);
+  if (!line[0])
+    return 0;
+
+  eq = strchr(line, '=');
+  dot1 = strchr(line, '.');
+  if (!eq || !dot1 || dot1 > eq) {
+    nr_err("uci: bad line in %s: %s", path, line);
+    return -EINVAL;
+  }
+
+  memset(pkg, 0, sizeof(pkg));
+  memset(sect, 0, sizeof(sect));
+  memset(opt, 0, sizeof(opt));
+
+  len = dot1 - line;
+  if (len + 1 > sizeof(pkg)) {
+    nr_err("uci: package too long in %s: %s", path, line);
+    return -E2BIG;
+  }
+  memcpy(pkg, line, len);
+  pkg[len] = '\0';
+
+  dot2 = memchr(dot1 + 1, '.', (size_t)(eq - dot1 - 1));
+  if (dot2) {
+    len = dot2 - (dot1 + 1);
+    if (len + 1 > sizeof(sect)) {
+      nr_err("uci: section too long in %s: %s", path, line);
+      return -E2BIG;
+    }
+    memcpy(sect, dot1 + 1, len);
+    sect[len] = '\0';
+
+    len = eq - (dot2 + 1);
+    if (len + 1 > sizeof(opt)) {
+      nr_err("uci: option too long in %s: %s", path, line);
+      return -E2BIG;
+    }
+    memcpy(opt, dot2 + 1, len);
+    opt[len] = '\0';
+  } else {
+    len = eq - (dot1 + 1);
+    if (len + 1 > sizeof(sect)) {
+      nr_err("uci: section too long in %s: %s", path, line);
+      return -E2BIG;
+    }
+    memcpy(sect, dot1 + 1, len);
+    sect[len] = '\0';
+  }
+
+  val = eq + 1;
+  while (*val == ' ' || *val == '\t')
+    val++;
+  strip_quotes(val);
+
+  return db_add(db, pkg, sect, opt, val, dot2 ? 0 : 1);
+}
+
 static int db_load_file(struct uci_db *db, const char *path) {
   char line[1024];
   FILE *f;
@@ -138,14 +207,6 @@ static int db_load_file(struct uci_db *db, const char *path) {
   }
 
   while (fgets(line, sizeof(line), f)) {
-    char *eq;
-    char *dot1;
-    char *dot2;
-    char *val;
-    char pkg[UCI_PKG_SZ];
-    char sect[UCI_SECT_SZ];
-    char opt[UCI_OPT_SZ];
-    size_t len;
     int rc;
 
     if (!strchr(line, '\n') && !feof(f)) {
@@ -154,67 +215,7 @@ static int db_load_file(struct uci_db *db, const char *path) {
       return -E2BIG;
     }
 
-    trim_eol(line);
-    if (!line[0])
-      continue;
-
-    eq = strchr(line, '=');
-    dot1 = strchr(line, '.');
-    if (!eq || !dot1 || dot1 > eq) {
-      nr_err("uci: bad line in %s: %s", path, line);
-      fclose(f);
-      return -EINVAL;
-    }
-
-    memset(pkg, 0, sizeof(pkg));
-    memset(sect, 0, sizeof(sect));
-    memset(opt, 0, sizeof(opt));
-
-    len = dot1 - line;
-    if (len + 1 > sizeof(pkg)) {
-      nr_err("uci: package too long in %s: %s", path, line);
-      fclose(f);
-      return -E2BIG;
-    }
-    memcpy(pkg, line, len);
-    pkg[len] = '\0';
-
-    dot2 = memchr(dot1 + 1, '.', (size_t)(eq - dot1 - 1));
-    if (dot2) {
-      len = dot2 - (dot1 + 1);
-      if (len + 1 > sizeof(sect)) {
-        nr_err("uci: section too long in %s: %s", path, line);
-        fclose(f);
-        return -E2BIG;
-      }
-      memcpy(sect, dot1 + 1, len);
-      sect[len] = '\0';
-
-      len = eq - (dot2 + 1);
-      if (len + 1 > sizeof(opt)) {
-        nr_err("uci: option too long in %s: %s", path, line);
-        fclose(f);
-        return -E2BIG;
-      }
-      memcpy(opt, dot2 + 1, len);
-      opt[len] = '\0';
-    } else {
-      len = eq - (dot1 + 1);
-      if (len + 1 > sizeof(sect)) {
-        nr_err("uci: section too long in %s: %s", path, line);
-        fclose(f);
-        return -E2BIG;
-      }
-      memcpy(sect, dot1 + 1, len);
-      sect[len] = '\0';
-    }
-
-    val = eq + 1;
-    while (*val == ' ' || *val == '\t')
-      val++;
-    strip_quotes(val);
-
-    rc = db_add(db, pkg, sect, opt, val, dot2 ? 0 : 1);
+    rc = db_load_line(db, path, line);
     if (rc) {
       fclose(f);
       return rc;
@@ -223,6 +224,160 @@ static int db_load_file(struct uci_db *db, const char *path) {
 
   fclose(f);
   return 0;
+}
+
+static int read_all_fd(int fd, char **buf) {
+  size_t cap;
+  size_t len;
+  char *tmp;
+
+  if (!buf)
+    return -EINVAL;
+
+  cap = 4096;
+  len = 0;
+  tmp = malloc(cap);
+  if (!tmp)
+    return -ENOMEM;
+
+  for (;;) {
+    ssize_t rd;
+
+    if (len + 1 >= cap) {
+      char *grown;
+
+      cap *= 2;
+      grown = realloc(tmp, cap);
+      if (!grown) {
+        free(tmp);
+        return -ENOMEM;
+      }
+      tmp = grown;
+    }
+
+    rd = read(fd, tmp + len, cap - len - 1);
+    if (rd == 0)
+      break;
+    if (rd < 0) {
+      if (errno == EINTR)
+        continue;
+      free(tmp);
+      return -errno;
+    }
+
+    len += (size_t)rd;
+  }
+
+  tmp[len] = '\0';
+  *buf = tmp;
+  return 0;
+}
+
+static int db_load_buf(struct uci_db *db, const char *path, const char *buf) {
+  char line[1024];
+  const char *s;
+
+  if (!buf)
+    return -EINVAL;
+
+  s = buf;
+  while (*s) {
+    size_t len;
+    int rc;
+
+    len = 0;
+    while (s[len] && s[len] != '\n' && s[len] != '\r')
+      len++;
+
+    if (len + 1 > sizeof(line)) {
+      nr_err("uci: line too long in %s", path);
+      return -E2BIG;
+    }
+
+    memcpy(line, s, len);
+    line[len] = '\0';
+    rc = db_load_line(db, path, line);
+    if (rc)
+      return rc;
+
+    s += len;
+    if (*s == '\r')
+      s++;
+    if (*s == '\n')
+      s++;
+  }
+
+  return 0;
+}
+
+static int run_capture(char **buf, const char *const argv[]) {
+  int pipefd[2];
+  int status;
+  pid_t pid;
+  int rc;
+
+  if (!buf || !argv || !argv[0])
+    return -EINVAL;
+
+  *buf = NULL;
+  if (pipe(pipefd) < 0)
+    return -errno;
+
+  pid = fork();
+  if (pid < 0) {
+    rc = -errno;
+    close(pipefd[0]);
+    close(pipefd[1]);
+    return rc;
+  }
+
+  if (pid == 0) {
+    close(pipefd[0]);
+    if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+      _exit(127);
+    close(pipefd[1]);
+    execvp(argv[0], (char *const *)argv);
+    _exit(127);
+  }
+
+  close(pipefd[1]);
+  rc = read_all_fd(pipefd[0], buf);
+  close(pipefd[0]);
+  if (waitpid(pid, &status, 0) < 0) {
+    free(*buf);
+    *buf = NULL;
+    return -errno;
+  }
+  if (rc) {
+    free(*buf);
+    *buf = NULL;
+    return rc;
+  }
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    free(*buf);
+    *buf = NULL;
+    nr_err("uci: command failed: %s", argv[0]);
+    return -EINVAL;
+  }
+
+  return 0;
+}
+
+static int db_load_live(struct uci_db *db, const char *uci_bin, const char *pkg) {
+  const char *const argv[] = {uci_bin ? uci_bin : "uci", "show", pkg, NULL};
+  char *buf;
+  int rc;
+
+  buf = NULL;
+  rc = run_capture(&buf, argv);
+  if (rc) {
+    nr_err("uci: %s show %s failed rc=%d", uci_bin ? uci_bin : "uci", pkg, rc);
+    return rc;
+  }
+
+  rc = db_load_buf(db, pkg, buf);
+  free(buf);
+  return rc;
 }
 
 static const char *db_get(const struct uci_db *db, const char *pkg, const char *sect, const char *opt) {
@@ -1024,7 +1179,8 @@ static int build_wg_vxlan_bridge(const struct uci_db *net,
   return add_wireless_ports(wifi, if_sect, ds);
 }
 
-static int uci_build_desired_set(const char *network_path, const char *wireless_path, struct desired_set *set) {
+static int uci_build_desired_set(const char *uci_bin, const char *network_path,
+                                 const char *wireless_path, struct desired_set *set) {
   struct uci_db net;
   struct uci_db wifi;
   int i;
@@ -1034,11 +1190,17 @@ static int uci_build_desired_set(const char *network_path, const char *wireless_
   memset(&wifi, 0, sizeof(wifi));
   memset(set, 0, sizeof(*set));
 
-  rc = db_load_file(&net, network_path);
+  if (network_path)
+    rc = db_load_file(&net, network_path);
+  else
+    rc = db_load_live(&net, uci_bin, "network");
   if (rc)
     return rc;
 
-  rc = db_load_file(&wifi, wireless_path);
+  if (wireless_path)
+    rc = db_load_file(&wifi, wireless_path);
+  else
+    rc = db_load_live(&wifi, uci_bin, "wireless");
   if (rc)
     return rc;
 
@@ -1102,7 +1264,7 @@ static int uci2yml_file(const char *network_path, const char *wireless_path, FIL
   struct desired_set set;
   int rc;
 
-  rc = uci_build_desired_set(network_path, wireless_path, &set);
+  rc = uci_build_desired_set(NULL, network_path, wireless_path, &set);
   if (rc)
     return rc;
 
@@ -1131,7 +1293,8 @@ int uci2yml(const char *network_path, const char *wireless_path, const char *yam
   return rc;
 }
 
-int uci_load_desired_set(const char *network_path, const char *wireless_path, struct desired_set *set) {
+int uci_load_desired_set(const char *uci_bin, const char *network_path,
+                         const char *wireless_path, struct desired_set *set) {
   char tmp[] = "/tmp/netrec-uci-XXXXXX";
   FILE *f;
   int fd;
@@ -1152,7 +1315,9 @@ int uci_load_desired_set(const char *network_path, const char *wireless_path, st
     return rc;
   }
 
-  rc = uci2yml_file(network_path, wireless_path, f);
+  rc = uci_build_desired_set(uci_bin, network_path, wireless_path, set);
+  if (!rc)
+    rc = cfg_set(f, set);
   if (!rc && fflush(f) < 0)
     rc = -errno;
   if (fclose(f) < 0 && !rc)

@@ -83,9 +83,8 @@ static int load_desired_set(const struct netrec_run_cfg *cfg, struct desired_set
   }
 
   if (!strcmp(cfg->source, "uci")) {
-    if (!cfg->uci_network || !cfg->uci_wireless)
-      return -EINVAL;
-    return uci_load_desired_set(cfg->uci_network, cfg->uci_wireless, set);
+    return uci_load_desired_set(cfg->uci_bin, cfg->uci_network,
+                                cfg->uci_wireless, set);
   }
 
   nr_err("source: unsupported %s", cfg->source);

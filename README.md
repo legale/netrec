@@ -34,14 +34,21 @@ Run UCI fixture dry-run:
 	./netrec --source uci --uci-network uci/uci.network \
 		--uci-wireless uci/uci.wireless
 
+Run live UCI dry-run:
+
+	./netrec --source uci
+
 Run equivalent multi-scenario fixture:
 
 	./netrec -c examples/uci_fixture.yaml
 
 Run watch mode with internal debounce:
 
-	./netrec --watch --debounce-ms 800 --source uci --uci-network uci/uci.network \
-		--uci-wireless uci/uci.wireless
+	./netrec --watch --debounce-ms 800 --source uci
+
+Use a non-default `uci` binary:
+
+	./netrec --source uci --uci-bin /tmp/test-bin/uci
 
 `--daemon` is an alias of `--watch`. netrec stays in foreground and is suitable
 for procd/systemd supervision.

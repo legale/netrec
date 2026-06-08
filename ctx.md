@@ -52,8 +52,16 @@ Apply:
 
 Watch:
 
+    ./netrec --watch --debounce-ms 800 --source uci
+    ./netrec --daemon --debounce-ms 800 --source uci
     ./netrec --watch --debounce-ms 800 --source uci --uci-network /tmp/uci.network --uci-wireless /tmp/uci.wireless
     ./netrec --daemon --debounce-ms 800 --source uci --uci-network /tmp/uci.network --uci-wireless /tmp/uci.wireless
+
+Live UCI source:
+
+    without --uci-network/--uci-wireless netrec runs `uci show network`
+    and `uci show wireless` itself before each verifier pass
+    --uci-bin path overrides the default `uci` binary name
 
 Return code:
 
@@ -84,11 +92,12 @@ Return code:
 
     main.c
         parse argv
-        -c config.yaml required
+        -c config.yaml required only for source=yaml
         default mode is dry-run
         --watch / --daemon enables foreground event loop
         --debounce-ms sets watch-mode debounce timeout
         --apply / -a enables execution of ACT commands
+        --uci-bin overrides the default live UCI command
         setup_syslog2("netrec", LOG_NOTICE, true)
         one-shot path goes through run.c
         watch path goes through watch.c
@@ -100,6 +109,9 @@ Return code:
 
     run.c
         load desired_set
+        for source=uci:
+            if dump paths are given, read those files
+            else fork/exec `uci show network` and `uci show wireless`
         load real_state through rtnetlink
         run verifier for each desired_state from the set over one real_state snapshot
         for --apply acquire /tmp/netrec.lock with flock LOCK_EX | LOCK_NB
@@ -543,6 +555,18 @@ Current result after watch mode and syslog2 integration on 2026-06-08:
         1 initial run
         1 coalesced rerun after debounce
 
+Current result after live-UCI self-fetch on 2026-06-08:
+
+    make check
+    rc=0
+
+    source=uci can run without dump files
+    one-shot and watch mode now call live `uci show network`
+    and `uci show wireless` themselves
+    fixture mode through --uci-network/--uci-wireless is kept unchanged
+    watch path switched from nlmon_add_filter/remove_filter
+    to nlmon_subscribe/unsubscribe
+
 Current UCI scope on 2026-06-07:
 
     file-based UCI input adapter exists
@@ -553,7 +577,7 @@ Current UCI scope on 2026-06-07:
         dhcp bridge -> uplink_bridge
         proto none bridge with vxlan port + matching wireguard peer -> wg_vxlan_bridge
     wireless wifi-iface entries are added to bridge.ports by matching wireless.network
-    live uci execution is not added yet
+    live uci execution is now supported through source=uci without dump paths
 
 ## Apply behavior
 

@@ -73,6 +73,44 @@ cmp -s "$tmp/yaml.out" "$tmp/uci.out" || {
 	exit 1
 }
 
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/uci" <<'EOF'
+#!/bin/sh
+case "$1:$2" in
+show:network)
+	cat uci/uci.network
+	;;
+show:wireless)
+	cat uci/uci.wireless
+	;;
+*)
+	exit 1
+	;;
+esac
+EOF
+chmod +x "$tmp/bin/uci"
+
+if ./netrec --source uci --uci-bin "$tmp/bin/uci" >"$tmp/uci.live.out" 2>&1; then
+	rc=0
+else
+	rc=$?
+fi
+
+case "$rc" in
+0|1) ;;
+*)
+	echo "FAIL uci live rc=$rc"
+	cat "$tmp/uci.live.out"
+	exit 1
+	;;
+esac
+
+cmp -s "$tmp/uci.out" "$tmp/uci.live.out" || {
+	echo "FAIL uci live mismatch"
+	diff -u "$tmp/uci.out" "$tmp/uci.live.out" || true
+	exit 1
+}
+
 grep -q 'bridge br-lan exists' "$tmp/uci.out" || {
 	echo "FAIL uci br-lan"
 	cat "$tmp/uci.out"

@@ -11,7 +11,7 @@
 #include "log.h"
 #include "watch.h"
 
-#define NETREC_WATCH_DEBOUNCE_MS 250
+#define NETREC_WATCH_DEBOUNCE_MS 500
 
 struct watch_ctx {
   struct netrec_run_cfg run;
@@ -104,6 +104,7 @@ int netrec_watch(const struct netrec_run_cfg *cfg, int debounce_ms) {
   struct sigaction sa;
   struct watch_ctx ctx;
   nlmon_filter_t filter;
+  nlmon_sub_t *sub;
   int pipefd[2];
   int rc;
 
@@ -112,6 +113,7 @@ int netrec_watch(const struct netrec_run_cfg *cfg, int debounce_ms) {
   memset(&sa, 0, sizeof(sa));
   memset(&old_int, 0, sizeof(old_int));
   memset(&old_term, 0, sizeof(old_term));
+  sub = NULL;
 
   ctx.run = *cfg;
   ctx.wake_rfd = -1;
@@ -163,8 +165,9 @@ int netrec_watch(const struct netrec_run_cfg *cfg, int debounce_ms) {
     rc = 1;
     goto out;
   }
-  if (nlmon_add_filter(&filter) != 0) {
-    nr_err("watch: nlmon_add_filter failed: %s", strerror(errno));
+  sub = nlmon_subscribe(&filter);
+  if (!sub) {
+    nr_err("watch: nlmon_subscribe failed: %s", strerror(errno));
     rc = 1;
     goto out_stop;
   }
@@ -215,6 +218,8 @@ int netrec_watch(const struct netrec_run_cfg *cfg, int debounce_ms) {
   }
 
 out_stop:
+  if (sub)
+    (void)nlmon_unsubscribe(sub);
   nlmon_stop();
 out:
   nr_notice("watch: stopped rc=%d", rc);

@@ -9,8 +9,10 @@
 static void usage(const char *prog) {
   fprintf(stderr,
           "usage: %s [-a|--apply] [-w|--watch|--daemon] [--debounce-ms ms] "
-          "[-c config.yaml] [--source yaml|uci] "
-          "[--uci-network path --uci-wireless path]\n",
+          "[-c config.yaml] [--source yaml|uci] [--uci-bin path] "
+          "[--uci-network path --uci-wireless path]\n"
+          "       source=yaml requires -c\n"
+          "       source=uci without paths runs uci show network/wireless\n",
           prog);
 }
 
@@ -19,6 +21,7 @@ int main(int argc, char **argv) {
   const char *cfg = NULL;
   const char *debounce_s = NULL;
   const char *source = "yaml";
+  const char *uci_bin = "uci";
   const char *uci_network = NULL;
   const char *uci_wireless = NULL;
   int apply = 0;
@@ -52,6 +55,10 @@ int main(int argc, char **argv) {
       source = argv[++i];
       continue;
     }
+    if (!strcmp(argv[i], "--uci-bin") && i + 1 < argc) {
+      uci_bin = argv[++i];
+      continue;
+    }
     if (!strcmp(argv[i], "--uci-network") && i + 1 < argc) {
       uci_network = argv[++i];
       continue;
@@ -69,11 +76,11 @@ int main(int argc, char **argv) {
     usage(argv[0]);
     return 2;
   }
-  if (!strcmp(source, "uci") && (!uci_network || !uci_wireless)) {
+  if (strcmp(source, "yaml") && strcmp(source, "uci")) {
     usage(argv[0]);
     return 2;
   }
-  if (strcmp(source, "yaml") && strcmp(source, "uci")) {
+  if (!strcmp(source, "uci") && (!!uci_network != !!uci_wireless)) {
     usage(argv[0]);
     return 2;
   }
@@ -91,6 +98,7 @@ int main(int argc, char **argv) {
   memset(&run, 0, sizeof(run));
   run.cfg_path = cfg;
   run.source = source;
+  run.uci_bin = uci_bin;
   run.uci_network = uci_network;
   run.uci_wireless = uci_wireless;
   run.apply = apply;

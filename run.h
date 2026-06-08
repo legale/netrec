@@ -4,6 +4,7 @@
 struct netrec_run_cfg {
   const char *cfg_path;
   const char *source;
+  const char *uci_bin;
   const char *uci_network;
   const char *uci_wireless;
   int apply;
