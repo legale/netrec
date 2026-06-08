@@ -3,13 +3,19 @@ netrec
 
 One-shot reconcile utility for Linux/Debian/OpenWrt-like systems.
 
-Default mode is dry-run. netrec reads desired state from YAML or from UCI dump
+Default mode is dry-run. netrec reads desired state from a simple line-based
+config or from UCI dump
 files, reads real state from the kernel through rtnetlink, prints OK/MISS lines
 and ACT commands. Without --apply it does not change the system.
 
-YAML input can be either one scenario mapping or a top-level sequence of
-scenario mappings. UCI input is converted to YAML first and then goes through
-the same YAML loader.
+The config format is intentionally strict and small. One line is one assignment:
+
+	bridge.name = "br-lan"
+	bridge.ports[] = "eth1"
+	bridge.ports[] = "eth2"
+
+UCI input is converted to the same line-based format first and then goes
+through the same loader.
 
 Build:
 
@@ -28,7 +34,7 @@ Run UCI fixture dry-run:
 	./netrec --source uci --uci-network uci/uci.network \
 		--uci-wireless uci/uci.wireless
 
-Run equivalent multi-scenario YAML fixture:
+Run equivalent multi-scenario fixture:
 
 	./netrec -c examples/uci_fixture.yaml
 
@@ -50,11 +56,24 @@ Apply mode:
 
 Supported scenarios:
 
+Config grammar:
+
+	path = key (("." key) | ("[" index "]"))*
+	key = [A-Za-z_][A-Za-z0-9_]*
+	index = decimal int, negative allowed at runtime
+	[] = append token, only for cfg_set/add and canonical array storage
+
+Canonical array output always uses append form only:
+
+	bridge.ports[] = "lan1"
+	bridge.ports[] = "lan2"
+
+Scenario examples:
+
 only_uplink
 
-	scenario: only_uplink
-	uplink:
-	  ifname: eth0
+	scenario = "only_uplink"
+	uplink.ifname = "eth0"
 
 Checks:
 
@@ -64,15 +83,12 @@ Checks:
 
 uplink_bridge
 
-	scenario: uplink_bridge
-	bridge:
-	  name: br-lan
-	  addr: 10.10.10.1/24
-	  ports:
-	    - eth1
-	    - eth2
-	uplink:
-	  ifname: eth0
+	scenario = "uplink_bridge"
+	bridge.name = "br-lan"
+	bridge.addr = "10.10.10.1/24"
+	bridge.ports[] = "eth1"
+	bridge.ports[] = "eth2"
+	uplink.ifname = "eth0"
 
 Checks/actions:
 
@@ -104,14 +120,12 @@ Static interface options:
 
 Static example:
 
-	bridge:
-	  name: br-lan
-	  addr_mode: static
-	  addr: 10.10.10.1/24
-	  gateway: 10.10.10.254
-	  dns:
-	    - 192.0.2.53
-	    - 192.0.2.54
+	bridge.name = "br-lan"
+	bridge.addr_mode = "static"
+	bridge.addr = "10.10.10.1/24"
+	bridge.gateway = "10.10.10.254"
+	bridge.dns[] = "192.0.2.53"
+	bridge.dns[] = "192.0.2.54"
 
 Gateway is checked as IPv4 main-table default route over bridge.name and repaired with:
 
@@ -125,29 +139,24 @@ comment ACT for missing DNS:
 
 DHCP example:
 
-	bridge:
-	  name: br-lan
-	  addr_mode: dhcp
-	  dhcp_cmd: udhcpc -i $iface -q -n
+	bridge.name = "br-lan"
+	bridge.addr_mode = "dhcp"
+	bridge.dhcp_cmd = "udhcpc -i $iface -q -n"
 
 $iface is replaced by bridge.name before execvp. No shell is used.
 
 vlan_bridge
 
-	scenario: vlan_bridge
-	bridge:
-	  name: br-lan
-	  addr: 10.10.10.1/24
-	  ports:
-	    - eth1
-	    - eth2
-	uplink:
-	  ifname: eth0
-	vlan:
-	  ifname: eth0.100
-	  id: 100
-	  link: eth0
-	  bridge: br-lan
+	scenario = "vlan_bridge"
+	bridge.name = "br-lan"
+	bridge.addr = "10.10.10.1/24"
+	bridge.ports[] = "eth1"
+	bridge.ports[] = "eth2"
+	uplink.ifname = "eth0"
+	vlan.ifname = "eth0.100"
+	vlan.id = "100"
+	vlan.link = "eth0"
+	vlan.bridge = "br-lan"
 
 Checks/actions:
 
@@ -162,25 +171,20 @@ Checks/actions:
 
 wg_vxlan_bridge
 
-	scenario: wg_vxlan_bridge
-	bridge:
-	  name: br-lan
-	  addr: 10.10.10.1/24
-	  ports:
-	    - eth1
-	    - eth2
-	uplink:
-	  ifname: eth0
-	wg:
-	  ifname: wg0
-	  peer_ip: 1.2.3.4
-	  route_dev: wg0
-	vxlan:
-	  ifname: vx100
-	  vni: 100
-	  remote: 10.20.30.40
-	  dev: wg0
-	  bridge: br-lan
+	scenario = "wg_vxlan_bridge"
+	bridge.name = "br-lan"
+	bridge.addr = "10.10.10.1/24"
+	bridge.ports[] = "eth1"
+	bridge.ports[] = "eth2"
+	uplink.ifname = "eth0"
+	wg.ifname = "wg0"
+	wg.peer_ip = "1.2.3.4"
+	wg.route_dev = "wg0"
+	vxlan.ifname = "vx100"
+	vxlan.vni = "100"
+	vxlan.remote = "10.20.30.40"
+	vxlan.dev = "wg0"
+	vxlan.bridge = "br-lan"
 
 Checks/actions:
 
@@ -202,12 +206,11 @@ link and `ip link add ... type vxlan` is emitted without `dev`.
 
 Optional routes:
 
-	routes:
-	  - dst: 0.0.0.0/0
-	    via: 10.10.10.254
-	    dev: br-lan
-	  - dst: 1.2.3.4/32
-	    dev: br-lan
+	routes.main.dst = "0.0.0.0/0"
+	routes.main.via = "10.10.10.254"
+	routes.main.dev = "br-lan"
+	routes.peer.dst = "1.2.3.4/32"
+	routes.peer.dev = "br-lan"
 
 Routes are IPv4 main-table routes. dst is required. dev is required. via is
 optional. Missing routes are repaired with ip route replace.
@@ -219,8 +222,8 @@ Limits:
 	bridge.ports supports 0..32 additional bridge member interfaces
 	routes supports 0..64 IPv4 routes
 	no daemon mode
-	YAML input supports one scenario or a top-level scenario sequence
-	UCI desired_set path is UCI dump -> YAML file -> YAML loader
+	config input supports one scenario or `state.<id>...` multi-state layout
+	UCI desired_set path is UCI dump -> line-based cfg file -> loader
 	UCI input adapter currently covers bridge/static, bridge/dhcp,
 	bridge+wg+vxlan and wireless bridge members
 	no JSON, firewall, netifd integration

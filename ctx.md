@@ -7,7 +7,7 @@
 
 Этот файл отражает текущее состояние кода netrec.
 
-Его нужно обновлять всякий раз, когда изменяется код, сценарии, YAML schema,
+Его нужно обновлять всякий раз, когда изменяется код, сценарии, line-based cfg schema,
 формат вывода, поведение --apply, ограничения, build/test команды или план
 следующих работ.
 
@@ -21,7 +21,7 @@ netrec - one-shot reconciler для Linux/Debian/OpenWrt-like систем.
 
 Задача:
 
-    читать desired network state из YAML
+    читать desired network state из простого line-based cfg
     снимать real state из ядра через rtnetlink
     сравнивать desired_state и real_state
     печатать стабильный diff в формате OK/MISS/ACT
@@ -47,7 +47,7 @@ Apply:
 Return code:
 
     0 - diff нет, apply failures нет, post-apply verify сошелся
-    1 - diff есть, apply command failed, YAML/netlink/internal error
+    1 - diff есть, apply command failed, cfg/netlink/internal error
     2 - ошибка аргументов командной строки
 
 ## Текущая реализация
@@ -55,6 +55,7 @@ Return code:
 Файлы верхнего уровня:
 
     main.c
+    cfg.c / cfg.h
     yaml.c / yaml.h
     state.c / state.h
     netlink.c / netlink.h
@@ -85,20 +86,32 @@ Return code:
     yaml.c
         yaml_load_desired_set()
         yaml_load_desired()
-        read YAML through libyaml
-        accept root mapping or top-level sequence of mappings
-        read scenario first
-        YAML path can fill one desired_state or the whole desired_set
+        read line-based cfg through cfg.c
+        load one top-level scenario or multi-state `state.<id>...`
         validate only relations needed by selected scenario
         no generic config graph
-        optional routes[] can be present for every scenario
+        optional routes.<name> can be present for every scenario
+
+    cfg.c
+        strict manual path parser
+        parse first, execute later
+        grammar:
+            key (("." key) | ("[" index "]"))*
+        key:
+            [A-Za-z_][A-Za-z0-9_]*
+        token kinds:
+            CFG_TOK_KEY
+            CFG_TOK_INDEX
+            CFG_TOK_APPEND
+        negative index resolved only against runtime array length
+        canonical array storage always prints `[]`, never `[N]` or `[-N]`
 
     uci.c
         uci2yml()
         parse network/wireless UCI dump files
         build desired_set in memory
-        serialize desired_set to YAML
-        uci_load_desired_set() writes temp YAML and reloads it through yaml_load_desired_set()
+        serialize desired_set to line-based cfg
+        uci_load_desired_set() writes temp cfg and reloads it through yaml_load_desired_set()
         verifier/core remains UCI-agnostic
 
     netlink.c
@@ -140,13 +153,13 @@ Return code:
 
 Desired state ядра verifier теперь подается как fixed-size desired_set.
 
-Сейчас YAML через libyaml поддерживает и одиночный scenario, и top-level
-sequence scenario-элементов. Это позволяет проверять multi-state desired_set
-через тот же YAML loader, без второго формата для verifier.
+Сейчас line-based cfg поддерживает и одиночный scenario, и multi-state layout
+через `state.<id>...`. Это позволяет проверять multi-state desired_set через
+тот же loader, без второго формата для verifier.
 
-UCI input теперь тоже проходит через тот же YAML path: сначала `uci2yml()`
-собирает multi-state YAML, затем `yaml_load_desired_set()` строит итоговый
-desired_set для verifier.
+UCI input теперь тоже проходит через тот же path: сначала `uci2yml()`
+собирает multi-state line-based cfg, затем `yaml_load_desired_set()` строит
+итоговый desired_set для verifier.
 
 Структура фиксированная и плоская:
 
@@ -169,11 +182,10 @@ desired_set для verifier.
 
 ### only_uplink
 
-YAML:
+Cfg:
 
-    scenario: only_uplink
-    uplink:
-      ifname: eth0
+    scenario = "only_uplink"
+    uplink.ifname = "eth0"
 
 Alias:
 
@@ -192,17 +204,14 @@ Actions:
 
 ### uplink_bridge
 
-YAML:
+Cfg:
 
-    scenario: uplink_bridge
-    bridge:
-      name: br-lan
-      addr: 10.10.10.1/24
-      ports:
-        - eth1
-        - eth2
-    uplink:
-      ifname: eth0
+    scenario = "uplink_bridge"
+    bridge.name = "br-lan"
+    bridge.addr = "10.10.10.1/24"
+    bridge.ports[] = "eth1"
+    bridge.ports[] = "eth2"
+    uplink.ifname = "eth0"
 
 Alias:
 
@@ -238,22 +247,18 @@ Actions:
 
 ### vlan_bridge
 
-YAML:
+Cfg:
 
-    scenario: vlan_bridge
-    bridge:
-      name: br-lan
-      addr: 10.10.10.1/24
-      ports:
-        - eth1
-        - eth2
-    uplink:
-      ifname: eth0
-    vlan:
-      ifname: eth0.100
-      id: 100
-      link: eth0
-      bridge: br-lan
+    scenario = "vlan_bridge"
+    bridge.name = "br-lan"
+    bridge.addr = "10.10.10.1/24"
+    bridge.ports[] = "eth1"
+    bridge.ports[] = "eth2"
+    uplink.ifname = "eth0"
+    vlan.ifname = "eth0.100"
+    vlan.id = "100"
+    vlan.link = "eth0"
+    vlan.bridge = "br-lan"
 
 Alias:
 
@@ -285,27 +290,22 @@ VLAN id/link are treated as immutable. If wrong, verifier emits recreate actions
 
 ### wg_vxlan_bridge
 
-YAML:
+Cfg:
 
-    scenario: wg_vxlan_bridge
-    bridge:
-      name: br-lan
-      addr: 10.10.10.1/24
-      ports:
-        - eth1
-        - eth2
-    uplink:
-      ifname: eth0
-    wg:
-      ifname: wg0
-      peer_ip: 1.2.3.4
-      route_dev: wg0
-    vxlan:
-      ifname: vx100
-      vni: 100
-      remote: 10.20.30.40
-      dev: wg0
-      bridge: br-lan
+    scenario = "wg_vxlan_bridge"
+    bridge.name = "br-lan"
+    bridge.addr = "10.10.10.1/24"
+    bridge.ports[] = "eth1"
+    bridge.ports[] = "eth2"
+    uplink.ifname = "eth0"
+    wg.ifname = "wg0"
+    wg.peer_ip = "1.2.3.4"
+    wg.route_dev = "wg0"
+    vxlan.ifname = "vx100"
+    vxlan.vni = "100"
+    vxlan.remote = "10.20.30.40"
+    vxlan.dev = "wg0"
+    vxlan.bridge = "br-lan"
 
 Rules:
 
@@ -377,14 +377,12 @@ an explicit small helper.
 
 Static example:
 
-    bridge:
-      name: br-lan
-      addr_mode: static
-      addr: 10.10.10.1/24
-      gateway: 10.10.10.254
-      dns:
-        - 192.0.2.53
-        - 192.0.2.54
+    bridge.name = "br-lan"
+    bridge.addr_mode = "static"
+    bridge.addr = "10.10.10.1/24"
+    bridge.gateway = "10.10.10.254"
+    bridge.dns[] = "192.0.2.53"
+    bridge.dns[] = "192.0.2.54"
 
 DHCP mode check:
 
@@ -396,26 +394,24 @@ DHCP mode action:
 
 Example:
 
-    bridge:
-      name: br-lan
-      addr_mode: dhcp
-      dhcp_cmd: udhcpc -i $iface -q -n
+    bridge.name = "br-lan"
+    bridge.addr_mode = "dhcp"
+    bridge.dhcp_cmd = "udhcpc -i $iface -q -n"
 
 No shell is used. Command string is split by spaces/tabs and executed through
 execvp. Quotes are not supported.
 
 ## Optional routes[]
 
-routes[] is optional for every scenario.
+routes are optional for every scenario.
 
-YAML:
+Cfg:
 
-    routes:
-      - dst: 0.0.0.0/0
-        via: 10.10.10.254
-        dev: br-lan
-      - dst: 1.2.3.4/32
-        dev: br-lan
+    routes.main.dst = "0.0.0.0/0"
+    routes.main.via = "10.10.10.254"
+    routes.main.dev = "br-lan"
+    routes.peer.dst = "1.2.3.4/32"
+    routes.peer.dev = "br-lan"
 
 Rules:
 
