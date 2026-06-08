@@ -8,7 +8,8 @@ files, reads real state from the kernel through rtnetlink, prints OK/MISS lines
 and ACT commands. Without --apply it does not change the system.
 
 YAML input can be either one scenario mapping or a top-level sequence of
-scenario mappings.
+scenario mappings. UCI input is converted to YAML first and then goes through
+the same YAML loader.
 
 Build:
 
@@ -30,6 +31,10 @@ Run UCI fixture dry-run:
 Run equivalent multi-scenario YAML fixture:
 
 	./netrec -c examples/uci_fixture.yaml
+
+Internal UCI conversion:
+
+	uci2yml(network_dump, wireless_dump, yaml_path)
 
 Run apply:
 
@@ -215,6 +220,7 @@ Limits:
 	routes supports 0..64 IPv4 routes
 	no daemon mode
 	YAML input supports one scenario or a top-level scenario sequence
+	UCI desired_set path is UCI dump -> YAML file -> YAML loader
 	UCI input adapter currently covers bridge/static, bridge/dhcp,
 	bridge+wg+vxlan and wireless bridge members
 	no JSON, firewall, netifd integration

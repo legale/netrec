@@ -3,8 +3,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "uci.h"
+#include "yaml.h"
 
 #define NR_UCI_ITEM_MAX 1024
 #define UCI_PKG_SZ 16
@@ -424,6 +426,289 @@ static int add_state(struct desired_set *set, struct desired_state **ds) {
   return 0;
 }
 
+static int yml_indent(FILE *f, int n) {
+  while (n-- > 0) {
+    if (fputc(' ', f) == EOF)
+      return -EIO;
+  }
+
+  return 0;
+}
+
+static int yml_quote(FILE *f, const char *s) {
+  const unsigned char *p;
+
+  if (fputc('\'', f) == EOF)
+    return -EIO;
+
+  for (p = (const unsigned char *)s; *p; p++) {
+    if (*p == '\'') {
+      if (fputc('\'', f) == EOF || fputc('\'', f) == EOF)
+        return -EIO;
+      continue;
+    }
+    if (fputc(*p, f) == EOF)
+      return -EIO;
+  }
+
+  if (fputc('\'', f) == EOF)
+    return -EIO;
+
+  return 0;
+}
+
+static int yml_key_str(FILE *f, int indent, const char *key, const char *val) {
+  int rc;
+
+  rc = yml_indent(f, indent);
+  if (rc)
+    return rc;
+  if (fprintf(f, "%s: ", key) < 0)
+    return -EIO;
+  rc = yml_quote(f, val);
+  if (rc)
+    return rc;
+  if (fputc('\n', f) == EOF)
+    return -EIO;
+
+  return 0;
+}
+
+static int yml_key_u32(FILE *f, int indent, const char *key, uint32_t val) {
+  int rc;
+
+  rc = yml_indent(f, indent);
+  if (rc)
+    return rc;
+  if (fprintf(f, "%s: %u\n", key, val) < 0)
+    return -EIO;
+
+  return 0;
+}
+
+static int yml_str_seq(FILE *f, int indent, const char *key, const char seq[][IFNAMSIZ], int n) {
+  int i;
+  int rc;
+
+  if (!n)
+    return 0;
+
+  rc = yml_indent(f, indent);
+  if (rc)
+    return rc;
+  if (fprintf(f, "%s:\n", key) < 0)
+    return -EIO;
+
+  for (i = 0; i < n; i++) {
+    rc = yml_indent(f, indent + 2);
+    if (rc)
+      return rc;
+    if (fprintf(f, "- ") < 0)
+      return -EIO;
+    rc = yml_quote(f, seq[i]);
+    if (rc)
+      return rc;
+    if (fputc('\n', f) == EOF)
+      return -EIO;
+  }
+
+  return 0;
+}
+
+static int yml_dns_seq(FILE *f, int indent, const char *key, const char seq[][INET_ADDRSTRLEN], int n) {
+  int i;
+  int rc;
+
+  if (!n)
+    return 0;
+
+  rc = yml_indent(f, indent);
+  if (rc)
+    return rc;
+  if (fprintf(f, "%s:\n", key) < 0)
+    return -EIO;
+
+  for (i = 0; i < n; i++) {
+    rc = yml_indent(f, indent + 2);
+    if (rc)
+      return rc;
+    if (fprintf(f, "- ") < 0)
+      return -EIO;
+    rc = yml_quote(f, seq[i]);
+    if (rc)
+      return rc;
+    if (fputc('\n', f) == EOF)
+      return -EIO;
+  }
+
+  return 0;
+}
+
+static int yml_routes(FILE *f, const struct desired_state *ds) {
+  const struct desired_route4 *rt;
+  int i;
+  int rc;
+
+  if (!ds->n_routes)
+    return 0;
+
+  if (fprintf(f, "  routes:\n") < 0)
+    return -EIO;
+
+  for (i = 0; i < ds->n_routes; i++) {
+    rt = &ds->routes[i];
+    if (fprintf(f, "    - dst: ") < 0)
+      return -EIO;
+    rc = yml_quote(f, rt->dst);
+    if (rc)
+      return rc;
+    if (fputc('\n', f) == EOF)
+      return -EIO;
+    rc = yml_key_str(f, 6, "dev", rt->dev);
+    if (rc)
+      return rc;
+    if (rt->has_via) {
+      rc = yml_key_str(f, 6, "via", rt->via);
+      if (rc)
+        return rc;
+    }
+  }
+
+  return 0;
+}
+
+static int yml_state(FILE *f, const struct desired_state *ds) {
+  int rc;
+
+  if (fprintf(f, "- scenario: ") < 0)
+    return -EIO;
+  rc = yml_quote(f, ds->scenario);
+  if (rc)
+    return rc;
+  if (fputc('\n', f) == EOF)
+    return -EIO;
+
+  if (ds->br_name[0]) {
+    if (fprintf(f, "  bridge:\n") < 0)
+      return -EIO;
+    rc = yml_key_str(f, 4, "name", ds->br_name);
+    if (rc)
+      return rc;
+    if (ds->br_addr_mode == ADDR_STATIC) {
+      rc = yml_key_str(f, 4, "addr_mode", "static");
+      if (rc)
+        return rc;
+      rc = yml_key_str(f, 4, "addr", ds->br_addr);
+      if (rc)
+        return rc;
+      if (ds->br_gateway[0]) {
+        rc = yml_key_str(f, 4, "gateway", ds->br_gateway);
+        if (rc)
+          return rc;
+      }
+      rc = yml_dns_seq(f, 4, "dns", ds->br_dns, ds->n_br_dns);
+      if (rc)
+        return rc;
+    } else if (ds->br_addr_mode == ADDR_DHCP) {
+      rc = yml_key_str(f, 4, "addr_mode", "dhcp");
+      if (rc)
+        return rc;
+      rc = yml_key_str(f, 4, "dhcp_cmd", ds->br_dhcp_cmd);
+      if (rc)
+        return rc;
+    } else {
+      rc = yml_key_str(f, 4, "addr_mode", "none");
+      if (rc)
+        return rc;
+    }
+    rc = yml_str_seq(f, 4, "ports", ds->br_ports, ds->n_br_ports);
+    if (rc)
+      return rc;
+  }
+
+  if (ds->up_ifname[0]) {
+    if (fprintf(f, "  uplink:\n") < 0)
+      return -EIO;
+    rc = yml_key_str(f, 4, "ifname", ds->up_ifname);
+    if (rc)
+      return rc;
+  }
+
+  if (ds->vlan_ifname[0]) {
+    if (fprintf(f, "  vlan:\n") < 0)
+      return -EIO;
+    rc = yml_key_str(f, 4, "ifname", ds->vlan_ifname);
+    if (rc)
+      return rc;
+    rc = yml_key_u32(f, 4, "id", ds->vlan_id);
+    if (rc)
+      return rc;
+    if (ds->vlan_link[0]) {
+      rc = yml_key_str(f, 4, "link", ds->vlan_link);
+      if (rc)
+        return rc;
+    }
+    if (ds->vlan_bridge[0]) {
+      rc = yml_key_str(f, 4, "bridge", ds->vlan_bridge);
+      if (rc)
+        return rc;
+    }
+  }
+
+  if (ds->wg_ifname[0]) {
+    if (fprintf(f, "  wg:\n") < 0)
+      return -EIO;
+    rc = yml_key_str(f, 4, "ifname", ds->wg_ifname);
+    if (rc)
+      return rc;
+    rc = yml_key_str(f, 4, "peer_ip", ds->wg_peer_ip);
+    if (rc)
+      return rc;
+    rc = yml_key_str(f, 4, "route_dev", ds->wg_route_dev);
+    if (rc)
+      return rc;
+  }
+
+  if (ds->vx_ifname[0]) {
+    if (fprintf(f, "  vxlan:\n") < 0)
+      return -EIO;
+    rc = yml_key_str(f, 4, "ifname", ds->vx_ifname);
+    if (rc)
+      return rc;
+    rc = yml_key_u32(f, 4, "vni", ds->vx_vni);
+    if (rc)
+      return rc;
+    rc = yml_key_str(f, 4, "remote", ds->vx_remote);
+    if (rc)
+      return rc;
+    if (ds->vx_dev[0]) {
+      rc = yml_key_str(f, 4, "dev", ds->vx_dev);
+      if (rc)
+        return rc;
+    }
+    rc = yml_key_str(f, 4, "bridge", ds->vx_bridge);
+    if (rc)
+      return rc;
+  }
+
+  return yml_routes(f, ds);
+}
+
+static int yml_set(FILE *f, const struct desired_set *set) {
+  int i;
+  int rc;
+
+  for (i = 0; i < set->n_state; i++) {
+    rc = yml_state(f, &set->state[i]);
+    if (rc)
+      return rc;
+    if (i + 1 != set->n_state && fputc('\n', f) == EOF)
+      return -EIO;
+  }
+
+  return ferror(f) ? -EIO : 0;
+}
+
 static int fill_bridge_proto(const struct uci_db *db, const char *if_sect, struct desired_state *ds) {
   const char *dns;
   const char *gateway;
@@ -692,7 +977,7 @@ static int build_wg_vxlan_bridge(const struct uci_db *net,
   return add_wireless_ports(wifi, if_sect, ds);
 }
 
-int uci_load_desired_set(const char *network_path, const char *wireless_path, struct desired_set *set) {
+static int uci_build_desired_set(const char *network_path, const char *wireless_path, struct desired_set *set) {
   struct uci_db net;
   struct uci_db wifi;
   int i;
@@ -764,4 +1049,73 @@ int uci_load_desired_set(const char *network_path, const char *wireless_path, st
   }
 
   return 0;
+}
+
+static int uci2yml_file(const char *network_path, const char *wireless_path, FILE *f) {
+  struct desired_set set;
+  int rc;
+
+  rc = uci_build_desired_set(network_path, wireless_path, &set);
+  if (rc)
+    return rc;
+
+  return yml_set(f, &set);
+}
+
+int uci2yml(const char *network_path, const char *wireless_path, const char *yaml_path) {
+  FILE *f;
+  int rc;
+
+  f = fopen(yaml_path, "wb");
+  if (!f) {
+    perror(yaml_path);
+    return -errno;
+  }
+
+  rc = uci2yml_file(network_path, wireless_path, f);
+  if (!rc && fflush(f) < 0)
+    rc = -errno;
+  if (fclose(f) < 0 && !rc)
+    rc = -errno;
+
+  if (rc)
+    unlink(yaml_path);
+
+  return rc;
+}
+
+int uci_load_desired_set(const char *network_path, const char *wireless_path, struct desired_set *set) {
+  char tmp[] = "/tmp/netrec-uci-XXXXXX";
+  FILE *f;
+  int fd;
+  int rc;
+
+  fd = mkstemp(tmp);
+  if (fd < 0) {
+    fprintf(stderr, "uci: mkstemp failed: %s\n", strerror(errno));
+    return -errno;
+  }
+
+  f = fdopen(fd, "wb");
+  if (!f) {
+    rc = -errno;
+    close(fd);
+    unlink(tmp);
+    fprintf(stderr, "uci: fdopen failed: %s\n", strerror(-rc));
+    return rc;
+  }
+
+  rc = uci2yml_file(network_path, wireless_path, f);
+  if (!rc && fflush(f) < 0)
+    rc = -errno;
+  if (fclose(f) < 0 && !rc)
+    rc = -errno;
+  if (rc) {
+    unlink(tmp);
+    return rc;
+  }
+
+  rc = yaml_load_desired_set(tmp, set);
+  unlink(tmp);
+  return rc;
 }

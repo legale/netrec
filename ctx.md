@@ -93,6 +93,14 @@ Return code:
         no generic config graph
         optional routes[] can be present for every scenario
 
+    uci.c
+        uci2yml()
+        parse network/wireless UCI dump files
+        build desired_set in memory
+        serialize desired_set to YAML
+        uci_load_desired_set() writes temp YAML and reloads it through yaml_load_desired_set()
+        verifier/core remains UCI-agnostic
+
     netlink.c
         nl_load_state()
         open NETLINK_ROUTE socket
@@ -135,6 +143,10 @@ Desired state ядра verifier теперь подается как fixed-size 
 Сейчас YAML через libyaml поддерживает и одиночный scenario, и top-level
 sequence scenario-элементов. Это позволяет проверять multi-state desired_set
 через тот же YAML loader, без второго формата для verifier.
+
+UCI input теперь тоже проходит через тот же YAML path: сначала `uci2yml()`
+собирает multi-state YAML, затем `yaml_load_desired_set()` строит итоговый
+desired_set для verifier.
 
 Структура фиксированная и плоская:
 
