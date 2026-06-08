@@ -525,6 +525,24 @@ Current result after desired_set prep on 2026-06-07:
     make check
     rc=0
 
+Current result after watch mode and syslog2 integration on 2026-06-08:
+
+    make check
+    rc=0
+
+    OpenWrt package rebuild
+    rc=0
+
+    live one-shot on 10.11.11.100
+    /tmp/netrec --source uci --uci-network /tmp/uci.network --uci-wireless /tmp/uci.wireless
+    rc=0
+
+    live watch test on 10.11.11.100
+    /tmp/netrec --watch --debounce-ms 800 --source uci ...
+    temporary bridge add/up/del burst produced 2 verifier passes:
+        1 initial run
+        1 coalesced rerun after debounce
+
 Current UCI scope on 2026-06-07:
 
     file-based UCI input adapter exists
